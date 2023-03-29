@@ -1,0 +1,119 @@
+#!/bin/sh
+
+# Usage: fz [option]
+# Selector list: prompts the user to select an option from a list, then performs
+# the action associated with that option.
+#
+# The scheme for the script is: generate-options -> fzf -> perform-action => repeat
+#
+# The script is designed to be used with fzf.
+#
+# Options: bg - select a background, then set it, the input files are from 
+#              ~/Pictures
+#          mount - select a mount point, then mount it
+#          umount - select a mount point, then unmount it
+#          display - A UI for detecting and selecting all displays. 
+#          Probes xrandr for connected displays and lets user select 
+#          one to use. User may also select "manual selection" which opens arandr. 
+#          help - print this help message
+#
+
+
+
+printhelp() {
+        echo "Usage: fz [option]"
+        echo "Options: "
+        echo "  bg - select a background, then set it, the input files are from ~/Pictures"
+        echo "  mount - select a mount point, then mount it"
+        echo "  umount - select a mount point, then unmount it"
+        echo "  display - select a monitor using randr, then ask where to display it"
+        echo "  help - print this help message"
+}
+smallfzf() {
+        fzf --height 40% --layout=reverse --border
+}
+
+base_lsblk="nvme0n1 nvme0n1p1 nvme0n1p2 nvme0n1p3 nvme0n1p4 nvme0n1p5 nvme0n1p6 nvme0n2 nvme0n3   
+"
+
+case "$1" in
+        bg)
+                list=$(ls ~/Pictures | grep -E '\.(jpg|png|gif)$' )
+                choice=$(printf "random\\n$list" |
+                fzf --height 40% --layout=reverse --border \
+                --preview='feh --bg-scale ~/Pictures/{}' \
+                --preview-window=right:0% )
+                case "$choice" in
+                        random)
+                                feh --bg-scale --randomize ~/Pictures/
+                                ;;
+                        *)
+                                feh --bg-scale ~/Pictures/"$choice"
+                                ;;
+                esac
+                ;;
+        mount | m)
+                list=$(lsblk -l | grep -E 'part' | awk '{print $1}') 
+                # remove the base devices from the list 
+                for i in $base_lsblk; do
+                        list=$(echo "$list" | grep -v "$i")
+                done
+                echo "$list" | smallfzf |  xargs -i sudo mount -m /dev/{} /mnt/{} 
+                ;;
+        umount | unmount | um)
+                list=$(lsblk -l | grep -E 'part' | awk '{print $1}')
+                # remove the base devices from the list
+                for i in $base_lsblk; do
+                        list=$(echo "$list" | grep -v "$i")
+                done
+                echo "$list" | smallfzf | xargs -i sudo umount /mnt/{}
+                ;;
+        display | d)
+                alldisp=$(xrandr -q | awk '/ connected/ {print $1}') 
+                # assert only two displays are connected
+                if [ $(echo "$alldisp" | wc -l) -gt 2 ]; then
+                        echo "Too many displays connected, exiting" >&2
+                        exit 1
+                fi
+                list=$(printf "Manual\\nMulti\\n$alldisp")
+                display=$(echo "$list" | smallfzf) && 
+                case "$display" in
+                        Manual)
+                                arandr
+                                exit
+                                ;;
+                        Multi)
+                                mirror=$(printf "Mirror\\nExtend" | smallfzf) &&
+                                case "$mirror" in
+                                        Mirror)
+                                                xrandr --output "$display" --auto --primary --output 
+                                                "$display" --auto --same-as "$display"
+                                                ;;
+                                        Extend)
+                                                primary=$(echo "$alldisp" | smallfzf) &&
+                                                        secondary=$(echo "$alldisp" | grep -v "$primary")&&
+                                                        direction=$(printf "left\\nright" | smallfzf) &&
+                                                        xrandr --output "$primary" --auto \
+                                                        --scale 1x1 --output "$secondary" --"$direction"-of \ 
+                                                        "$primary" --auto --scale 1x1 
+                                                ;;
+                                        *)
+                                                exit 1
+                                                ;;
+                                esac
+                                ;;
+                        *)
+                                xrandr --output "$display" --auto 
+                                ;;
+                esac
+                ;;
+        help | h)
+                printhelp
+                ;;
+        *)
+                printhelp >&2
+                ;;
+esac
+
+
+
