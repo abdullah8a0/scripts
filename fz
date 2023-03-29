@@ -14,7 +14,11 @@
 #          umount - select a mount point, then unmount it
 #          display - A UI for detecting and selecting all displays. 
 #          Probes xrandr for connected displays and lets user select 
-#          one to use. User may also select "manual selection" which opens arandr. 
+#          one to use. User may also select "manual selection" which opens arandr. '=
+#          eth - run ifplugd to connect to the internet
+#          fs - select a filesystem, particulary remote, then mount it
+#          unfs - select a filesystem, particulary remote, then unmount it
+#          fz - run fz again, but this time use fzf to select the option
 #          help - print this help message
 #
 
@@ -23,11 +27,15 @@
 printhelp() {
         echo "Usage: fz [option]"
         echo "Options: "
-        echo "  bg - select a background, then set it, the input files are from ~/Pictures"
-        echo "  mount - select a mount point, then mount it"
-        echo "  umount - select a mount point, then unmount it"
-        echo "  display - select a monitor using randr, then ask where to display it"
-        echo "  help - print this help message"
+        echo "  fz      - run fz again, but this time use fzf to select the option"
+        echo "  bg      - select a background, then set it, the input files are from ~/Pictures"
+        echo "  mount   - select a mount point, then mount it"
+        echo "  umount  - select a mount point, then unmount it"
+        echo "  disp    - select a monitor using randr, then ask where to display it"
+        echo "  eth     - run ifplugd to connect to the internet"
+        echo "  fs      - select a filesystem, particulary remote, then mount it"
+        echo "  ufs     - select a filesystem, particulary remote, then unmount it"
+        echo "  help    - print this help message"
 }
 smallfzf() {
         fzf --height 40% --layout=reverse --border
@@ -35,6 +43,22 @@ smallfzf() {
 
 base_lsblk="nvme0n1 nvme0n1p1 nvme0n1p2 nvme0n1p3 nvme0n1p4 nvme0n1p5 nvme0n1p6 nvme0n2 nvme0n3   
 "
+
+bg_tags="bg background image wallpaper Picture Pictures pic pics image images"
+mount_tags="mount mountp usb drive drives cd CD dvd DVD flash flashdrive flashdrives memory stick thumbdrive thunderbolt"
+umount_tags="umount unmount unmountp remove eject unplug unplugp"
+display_tags="display monitor screen screens multi dual dualscreen dualscreens mirror extend extendscreen"
+eth_tags="internet eth ethernet network networks wifi wifis wlan wlans lan lans wireless connect connected connection connections"
+remote_fs_tags="remote remotefs remotefilesystem remotefilesystems remote_fs remote_fs remote_filesystem remote_filesystems fileserve"
+unremote_fs_tags="unremote unremotefs unremotefilesystem unremotefilesystems unremote_fs unremote_fs unremote_filesystem unremote_filesystems unfileserve removefs removefilesystem disconnect"
+
+
+
+sshfs_user=("aabi" "aabi")
+sshfs_host=("unicorn.csail.mit.edu" "unicorn.csail.mit.edu")
+sshfs_mountpoint=("$HOME/remote/linux" "$HOME/remote/opensbi")
+sshfs_remote=("/afs/csail.mit.edu/u/a/aabi/linux" "/afs/csail.mit.edu/u/a/aabi/opensbi")
+sshfs_password=("!8qG%gcO22rA" "!8qG%gcO22rA")
 
 case "$1" in
         bg)
@@ -106,6 +130,60 @@ case "$1" in
                                 xrandr --output "$display" --auto 
                                 ;;
                 esac
+                ;;
+        eth)
+                sudo ifplugd
+                ;;
+        fs | remotefs)
+                list_remote=""
+                for i in ${!sshfs_remote[@]}; do
+                        list_remote="$list_remote\\n${sshfs_remote[$i]}"
+                done
+                list_remote=$(echo "$list_remote" | sed 's/\\n//')
+                choice=$(printf "$list_remote" | smallfzf)
+                index=$(printf "$list_remote" | grep -n "$choice" | awk -F: '{print $1}')
+                index=$((index-1))
+                mkdir -p "${sshfs_mountpoint[$index]}"
+                echo "${sshfs_password[$index]}" | xclip -i
+                sshfs -o default_permissions "${sshfs_user[$index]}@${sshfs_host[$index]}:${sshfs_remote[$index]}" "${sshfs_mountpoint[$index]}" 
+                ;;
+        umountfs | unmountfs | unfs | uf | ufs)
+                list=$(ls -d ~/remote/*)
+                choice=$(printf "$list" | smallfzf)
+                fusermount -u "$choice"
+                ;;
+        fz | fzf)
+                # this is a special case, it uses fzf to find the correct command to run
+                # for the prompt
+                list=$(printf "$bg_tags\\n$mount_tags\\n$umount_tags\\n$display_tags\\n$eth_tags\\n$remote_fs_tags")
+                cmd=$(echo "$list" | smallfzf)
+                case "$cmd" in
+                        $bg_tags)
+                                cmd="bg"
+                                ;;
+                        $mount_tags)
+                                cmd="mount"
+                                ;;
+                        $umount_tags)
+                                cmd="umount"
+                                ;;
+                        $display_tags)
+                                cmd="display"
+                                ;;
+                        $eth_tags)
+                                cmd="eth"
+                                ;;
+                        $remote_fs_tags)
+                                cmd="fs"
+                                ;;
+                        $unremote_fs_tags)
+                                cmd="unfs"
+                                ;;
+                        *)
+                                cmd="help"
+                                ;;
+                esac
+               "$0" "$cmd"
                 ;;
         help | h)
                 printhelp
