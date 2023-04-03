@@ -53,12 +53,11 @@ remote_fs_tags="remote remotefs remotefilesystem remotefilesystems remote_fs rem
 unremote_fs_tags="unremote unremotefs unremotefilesystem unremotefilesystems unremote_fs unremote_fs unremote_filesystem unremote_filesystems unfileserve removefs removefilesystem disconnect"
 
 
-
-sshfs_user=("aabi" "aabi")
-sshfs_host=("unicorn.csail.mit.edu" "unicorn.csail.mit.edu")
-sshfs_mountpoint=("$HOME/remote/linux" "$HOME/remote/opensbi")
-sshfs_remote=("/afs/csail.mit.edu/u/a/aabi/linux" "/afs/csail.mit.edu/u/a/aabi/opensbi")
-sshfs_password=("!8qG%gcO22rA" "!8qG%gcO22rA")
+sshfs_user=("aabi" "aabi" "abd880-shd")
+sshfs_host=("unicorn.csail.mit.edu" "unicorn.csail.mit.edu" "arch-sec-2.csail.mit.edu")
+sshfs_mountpoint=("$HOME/remote/linux" "$HOME/remote/opensbi" "$HOME/remote/lab3")
+sshfs_remote=("/afs/csail.mit.edu/u/a/aabi/linux" "/afs/csail.mit.edu/u/a/aabi/opensbi" "/home/abd880-shd/spectre-abdullah8a0")
+sshfs_password=("!8qG%gcO22rA" "!8qG%gcO22rA" "oRoJeK60ytmU")
 
 case "$1" in
         bg)
@@ -145,7 +144,7 @@ case "$1" in
                 index=$((index-1))
                 mkdir -p "${sshfs_mountpoint[$index]}"
                 echo "${sshfs_password[$index]}" | xclip -i
-                sshfs -o default_permissions "${sshfs_user[$index]}@${sshfs_host[$index]}:${sshfs_remote[$index]}" "${sshfs_mountpoint[$index]}" 
+                sshfs "${sshfs_user[$index]}@${sshfs_host[$index]}:${sshfs_remote[$index]}" "${sshfs_mountpoint[$index]}" 
                 ;;
         umountfs | unmountfs | unfs | uf | ufs)
                 list=$(ls -d ~/remote/*)
