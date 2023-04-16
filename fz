@@ -1,196 +1,332 @@
-#!/bin/sh
+#!/bin/python3
 
-# Usage: fz [option]
-# Selector list: prompts the user to select an option from a list, then performs
-# the action associated with that option.
-#
-# The scheme for the script is: generate-options -> fzf -> perform-action => repeat
-#
-# The script is designed to be used with fzf.
-#
-# Options: bg - select a background, then set it, the input files are from 
-#              ~/Pictures
-#          mount - select a mount point, then mount it
-#          umount - select a mount point, then unmount it
-#          display - A UI for detecting and selecting all displays. 
-#          Probes xrandr for connected displays and lets user select 
-#          one to use. User may also select "manual selection" which opens arandr. '=
-#          eth - run ifplugd to connect to the internet
-#          fs - select a filesystem, particulary remote, then mount it
-#          unfs - select a filesystem, particulary remote, then unmount it
-#          fz - run fz again, but this time use fzf to select the option
-#          help - print this help message
-#
+import sys
+import os
+import subprocess
+
+_iota = 0
 
 
+def iota():
+    global _iota
+    _iota += 1
+    return _iota
 
-printhelp() {
-        echo "Usage: fz [option]"
-        echo "Options: "
-        echo "  fz      - run fz again, but this time use fzf to select the option"
-        echo "  bg      - select a background, then set it, the input files are from ~/Pictures"
-        echo "  mount   - select a mount point, then mount it"
-        echo "  umount  - select a mount point, then unmount it"
-        echo "  disp    - select a monitor using randr, then ask where to display it"
-        echo "  eth     - run ifplugd to connect to the internet"
-        echo "  fs      - select a filesystem, particulary remote, then mount it"
-        echo "  ufs     - select a filesystem, particulary remote, then unmount it"
-        echo "  help    - print this help message"
+
+CMD_BG = iota()
+CMD_MOUNT = iota()
+CMD_UMOUNT = iota()
+CMD_DISP = iota()
+CMD_ETH = iota()
+CMD_FS = iota()
+CMD_UFS = iota()
+CMD_HELP = iota()
+CMD_FZF = iota()
+CMD_BT = iota()
+CMD_UBT = iota()
+
+NUM_CMDS = iota()
+
+HOME = os.environ["HOME"]
+COPY_CMD = "wl-copy"
+
+sshfs_lookup = {
+        "/afs/csail.mit.edu/u/a/aabi/linux":
+        ["aabi", "unicorn.csail.mit.edu",
+         HOME + "/remote/linux", "!8qG%gcO22rA"],
+        "/afs/csail.mit.edu/u/a/aabi/opensbi":
+        ["aabi", "unicorn.csail.mit.edu",
+         HOME+"/remote/opensbi", "!8qG%gcO22rA"],
+        "/home/abd880-shd/spectre-abdullah8a0":
+        ["abd880-shd", "arch-sec-2.csail.mit.edu",
+         HOME+"/remote/lab3", "oRoJeK60ytmU"],
+        "/home/abd880-shd/rowhammer-abdullah8a0":
+        ["abd880-shd", "arch-sec-1.csail.mit.edu",
+         HOME+"/remote/lab4", "supersecure"],
+        "/afs/athena.mit.edu/user/a/b/abd880":
+        ["abd880", "athena.dialup.mit.edu",
+         HOME+"/remote/athena", "AQR6p%6v^uMt"],
 }
-smallfzf() {
-        fzf --height 40% --layout=reverse --border
-}
-
-base_lsblk="nvme0n1 nvme0n1p1 nvme0n1p2 nvme0n1p3 nvme0n1p4 nvme0n1p5 nvme0n1p6 nvme0n2 nvme0n3   
-"
-
-bg_tags="bg background image wallpaper Picture Pictures pic pics image images"
-mount_tags="mount mountp usb drive drives cd CD dvd DVD flash flashdrive flashdrives memory stick thumbdrive thunderbolt"
-umount_tags="umount unmount unmountp remove eject unplug unplugp"
-display_tags="display monitor screen screens multi dual dualscreen dualscreens mirror extend extendscreen"
-eth_tags="internet eth ethernet network networks wifi wifis wlan wlans lan lans wireless connect connected connection connections"
-remote_fs_tags="remote remotefs remotefilesystem remotefilesystems remote_fs remote_fs remote_filesystem remote_filesystems fileserve"
-unremote_fs_tags="unremote unremotefs unremotefilesystem unremotefilesystems unremote_fs unremote_fs unremote_filesystem unremote_filesystems unfileserve removefs removefilesystem disconnect"
 
 
-sshfs_user=("aabi" "aabi" "abd880-shd")
-sshfs_host=("unicorn.csail.mit.edu" "unicorn.csail.mit.edu" "arch-sec-2.csail.mit.edu")
-sshfs_mountpoint=("$HOME/remote/linux" "$HOME/remote/opensbi" "$HOME/remote/lab3")
-sshfs_remote=("/afs/csail.mit.edu/u/a/aabi/linux" "/afs/csail.mit.edu/u/a/aabi/opensbi" "/home/abd880-shd/spectre-abdullah8a0")
-sshfs_password=("!8qG%gcO22rA" "!8qG%gcO22rA" "oRoJeK60ytmU")
+def call_fzf(lin, **kwargs):
+    args = ["fzf"]
+    for k, v in kwargs.items():
+        args.append("--" + k)
+        args.append(v)
+    if "height" not in kwargs:
+        args.append("--height")
+        args.append("50%")
+    if "border" not in kwargs:
+        args.append("--border")
+    if "reverse" not in kwargs:
+        args.append("--reverse")
 
-case "$1" in
-        bg)
-                list=$(ls ~/Pictures | grep -E '\.(jpg|png|gif)$' )
-                choice=$(printf "random\\n$list" |
-                fzf --height 40% --layout=reverse --border \
-                --preview='feh --bg-scale ~/Pictures/{}' \
-                --preview-window=right:0% )
-                case "$choice" in
-                        random)
-                                feh --bg-scale --randomize ~/Pictures/
-                                ;;
-                        *)
-                                feh --bg-scale ~/Pictures/"$choice"
-                                ;;
-                esac
-                ;;
-        mount | m)
-                list=$(lsblk -l | grep -E 'part' | awk '{print $1}') 
-                # remove the base devices from the list 
-                for i in $base_lsblk; do
-                        list=$(echo "$list" | grep -v "$i")
-                done
-                echo "$list" | smallfzf |  xargs -i sudo mount -m /dev/{} /mnt/{} 
-                ;;
-        umount | unmount | um)
-                list=$(lsblk -l | grep -E 'part' | awk '{print $1}')
-                # remove the base devices from the list
-                for i in $base_lsblk; do
-                        list=$(echo "$list" | grep -v "$i")
-                done
-                echo "$list" | smallfzf | xargs -i sudo umount /mnt/{}
-                ;;
-        display | d)
-                alldisp=$(xrandr -q | awk '/ connected/ {print $1}') 
-                # assert only two displays are connected
-                if [ $(echo "$alldisp" | wc -l) -gt 2 ]; then
-                        echo "Too many displays connected, exiting" >&2
-                        exit 1
-                fi
-                list=$(printf "Manual\\nMulti\\n$alldisp")
-                display=$(echo "$list" | smallfzf) && 
-                case "$display" in
-                        Manual)
-                                arandr
-                                exit
-                                ;;
-                        Multi)
-                                mirror=$(printf "Mirror\\nExtend" | smallfzf) &&
-                                case "$mirror" in
-                                        Mirror)
-                                                xrandr --output "$display" --auto --primary --output 
-                                                "$display" --auto --same-as "$display"
-                                                ;;
-                                        Extend)
-                                                primary=$(echo "$alldisp" | smallfzf) &&
-                                                        secondary=$(echo "$alldisp" | grep -v "$primary")&&
-                                                        direction=$(printf "left\\nright" | smallfzf) &&
-                                                        xrandr --output "$primary" --auto \
-                                                        --scale 1x1 --output "$secondary" --"$direction"-of \ 
-                                                        "$primary" --auto --scale 1x1 
-                                                ;;
-                                        *)
-                                                exit 1
-                                                ;;
-                                esac
-                                ;;
-                        *)
-                                xrandr --output "$display" --auto 
-                                ;;
-                esac
-                ;;
-        eth)
-                sudo ifplugd
-                ;;
-        fs | remotefs)
-                list_remote=""
-                for i in ${!sshfs_remote[@]}; do
-                        list_remote="$list_remote\\n${sshfs_remote[$i]}"
-                done
-                list_remote=$(echo "$list_remote" | sed 's/\\n//')
-                choice=$(printf "$list_remote" | smallfzf)
-                index=$(printf "$list_remote" | grep -n "$choice" | awk -F: '{print $1}')
-                index=$((index-1))
-                mkdir -p "${sshfs_mountpoint[$index]}"
-                echo "${sshfs_password[$index]}" | xclip -i
-                sshfs "${sshfs_user[$index]}@${sshfs_host[$index]}:${sshfs_remote[$index]}" "${sshfs_mountpoint[$index]}" 
-                ;;
-        umountfs | unmountfs | unfs | uf | ufs)
-                list=$(ls -d ~/remote/*)
-                choice=$(printf "$list" | smallfzf)
-                fusermount -u "$choice"
-                ;;
-        fz | fzf)
-                # this is a special case, it uses fzf to find the correct command to run
-                # for the prompt
-                list=$(printf "$bg_tags\\n$mount_tags\\n$umount_tags\\n$display_tags\\n$eth_tags\\n$remote_fs_tags")
-                cmd=$(echo "$list" | smallfzf)
-                case "$cmd" in
-                        $bg_tags)
-                                cmd="bg"
-                                ;;
-                        $mount_tags)
-                                cmd="mount"
-                                ;;
-                        $umount_tags)
-                                cmd="umount"
-                                ;;
-                        $display_tags)
-                                cmd="display"
-                                ;;
-                        $eth_tags)
-                                cmd="eth"
-                                ;;
-                        $remote_fs_tags)
-                                cmd="fs"
-                                ;;
-                        $unremote_fs_tags)
-                                cmd="unfs"
-                                ;;
-                        *)
-                                cmd="help"
-                                ;;
-                esac
-               "$0" "$cmd"
-                ;;
-        help | h)
-                printhelp
-                ;;
-        *)
-                printhelp >&2
-                ;;
-esac
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    out, err = p.communicate(lin.encode())
+    return out.decode().strip()
 
 
+def bt():
+    devices = subprocess.run(["bluetoothctl", "devices"],
+                             stdout=subprocess.PIPE)
+    devices = devices.stdout.decode().splitlines()
+    devices = [x.split() for x in devices]
+    names = [" ".join(x[2:]) for x in devices]
+    ids = [x[1] for x in devices]
+    choice = call_fzf("\n".join(names), prompt="Select a device: ")
 
+    if choice == "":
+        return
+
+    subprocess.run(["bluetoothctl", "connect", ids[names.index(choice)]])
+    return
+
+
+def ubt():
+    devices = subprocess.run(["bluetoothctl", "devices"],
+                             stdout=subprocess.PIPE)
+    devices = devices.stdout.decode().splitlines()
+    devices = [x.split() for x in devices]
+    names = [" ".join(x[2:]) for x in devices]
+    ids = [x[1] for x in devices]
+    choice = call_fzf("\n".join(names), prompt="Select a device: ")
+
+    if choice == "":
+        return
+
+    subprocess.run(["bluetoothctl", "disconnect", ids[names.index(choice)]])
+    return
+
+
+def bg():
+    pics = os.listdir("/home/abdullah/Pictures/Wallpapers")
+    choice = call_fzf("random\n"+"\n".join(pics),
+                      prompt="Select a background: ",
+                      preview="swaymsg output '*' \
+                              bg /home/abdullah/Pictures/Wallpapers/{} fill",
+                      **{"preview-window": "0%"})
+    if choice == "":
+        return
+    # Using sway on Wayland
+    if choice == "random":
+        os.system("swaymsg output '*' bg /home/abdullah/Pictures/$(ls \
+                /home/abdullah/Pictures/Wallpapers | shuf -n 1) fill")
+    else:
+        os.system("swaymsg output '*' bg /home/abdullah/Pictures/"
+                  + choice + " fill")
+    return
+
+
+base_lsblk = [
+        "nvme0n1", "nvme0n1p1", "nvme0n1p2", "nvme0n1p3", "nvme0n1p4",
+        "nvme0n1p5", "nvme0n1p6", "nvme0n2", "nvme0n3"]
+
+
+def mount():
+    p1 = subprocess.Popen(["lsblk", "-l"], stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(["grep", "-E", "part"], stdin=p1.stdout,
+                          stdout=subprocess.PIPE)
+    p3 = subprocess.Popen(["awk", "{print $1}"], stdin=p2.stdout,
+                          stdout=subprocess.PIPE)
+    p1.stdout.close()
+    p2.stdout.close()
+    out, err = p3.communicate()
+    points = out.decode().splitlines()
+    for i in base_lsblk:
+        points = [x for x in points if x != i]
+    choice = call_fzf("\n".join(points), prompt="Select a mount point: ")
+
+    if choice == "":
+        return
+
+    os.system("mkdir -p " + "/mnt/" + choice)
+    os.system("sudo chown -R abdullah " + "/mnt/" + choice)
+
+    subprocess.run(["sudo", "mount", "/dev/" + choice, "/mnt/" + choice,
+                    "-o", "uid=abdullah,gid=abdullah"])
+    return
+
+
+def umount():
+    p1 = subprocess.Popen(["lsblk", "-l"], stdout=subprocess.PIPE)
+    p2 = subprocess.Popen(["grep", "-E", "part"], stdin=p1.stdout,
+                          stdout=subprocess.PIPE)
+    p3 = subprocess.Popen(["awk", "{print $1}"], stdin=p2.stdout,
+                          stdout=subprocess.PIPE)
+    p1.stdout.close()
+    p2.stdout.close()
+    out, err = p3.communicate()
+    points = out.decode().splitlines()
+    for i in base_lsblk:
+        points = [x for x in points if x != i]
+    choice = call_fzf("\n".join(points), prompt="Select a mount point: ")
+
+    if choice == "":
+        return
+
+    subprocess.run(["sudo", "umount", "/mnt/" + choice])
+    return
+
+
+def display():
+    print("display is not implemented yet")
+    return
+
+
+def eth():
+    ret = subprocess.run(["sudo", "ifplugd"])
+    if ret.returncode == 0:
+        print("Ethernet connected")
+    return
+
+
+def fs():
+    filesys = list(sshfs_lookup.keys())
+    choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
+
+    if choice == "":
+        return
+
+    os.system("mkdir -p " + sshfs_lookup[choice][2])
+    os.system("echo " + sshfs_lookup[choice][3] + " | " + COPY_CMD)
+    os.system("sshfs " + sshfs_lookup[choice][0] + "@"
+              + sshfs_lookup[choice][1] + ":"
+              + choice + " "
+              + sshfs_lookup[choice][2])
+    # cd into the directory
+
+    os.chdir(sshfs_lookup[choice][2])
+    return
+
+
+def ufs():
+    filesys = list(sshfs_lookup.keys())
+    choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
+
+    if choice == "":
+        return
+
+    os.system("fusermount -u " + sshfs_lookup[choice][2])
+
+    return
+
+
+bg_tags = "bg background image wallpaper Picture Pictures pic\
+        pics image images"
+mount_tags = "mount mountp usb drive drives cd CD dvd DVD flash \
+        flashdrive flashdrives memory stick thumbdrive thunderbolt"
+umount_tags = "umount unmount unmountp remove eject unplug unplugp"
+display_tags = "display monitor screen screens multi dual dualscreen \
+        dualscreens mirror extend extendscreen"
+eth_tags = "internet eth ethernet network networks wifi wifis wlan \
+        wlans lan lans wireless connect connected connection connections"
+remote_fs_tags = "remote remotefs remotefilesystem remotefilesystems \
+        remote_fs remote_fs remote_filesystem remote_filesystems fileserve fs"
+unremote_fs_tags = "unremote unremotefs unremotefilesystems \
+        unremote_fs unremote_fs removefilesystem disconnect ufs unfs"
+bt_tags = "bluetooth bt"
+unbt_tags = "unbluetooth ubt unbt"
+
+
+tags = [
+        bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
+        remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags
+        ]
+tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt]
+
+assert len(tags) == len(tags_fun)
+assert len(tags) == NUM_CMDS-3
+
+
+def fz():
+    choice = call_fzf("\n".join(tags), prompt="Select a tag: ")
+
+    if choice == "":
+        return
+
+    index = tags.index(choice)
+    tags_fun[index]()
+    return
+
+
+def print_usage():
+    print("Usage: fz [option]")
+    print("Options: ")
+    print("  fz      - run fz again, but this time use fzf to select the option")
+    print("  bg      - select a background, then set it, the input files are from ~/Pictures")
+    print("  mount   - select a mount point, then mount it")
+    print("  umount  - select a mount point, then unmount it")
+    print("  disp    - select a monitor using randr, then ask where to display it")
+    print("  eth     - run ifplugd to connect to the internet")
+    print("  fs      - select a filesystem, particulary remote, then mount it")
+    print("  ufs     - select a filesystem, particulary remote, then unmount it")
+    print("  bt      - select a bluetooth device, then connect to it")
+    print("  ubt     - select a bluetooth device, then disconnect from it")
+    print("  help    - print this help message")
+
+
+def parse_args():
+    if len(sys.argv) != 2:
+        print_usage()
+        sys.exit(0)
+
+    if sys.argv[1] in ["bg"]:
+        return CMD_BG
+    elif sys.argv[1] in ["m", "mount"]:
+        return CMD_MOUNT
+    elif sys.argv[1] in ["um", "umount"]:
+        return CMD_UMOUNT
+    elif sys.argv[1] in ["d", "disp", "display"]:
+        return CMD_DISP
+    elif sys.argv[1] in ["e", "eth", "ethernet"]:
+        return CMD_ETH
+    elif sys.argv[1] in ["fs", "remotefs"]:
+        return CMD_FS
+    elif sys.argv[1] in ["ufs", "unmountfs", "unfs"]:
+        return CMD_UFS
+    elif sys.argv[1] in ["h", "help"]:
+        return CMD_HELP
+    elif sys.argv[1] in ["fz", "fzf"]:
+        return CMD_FZF
+    elif sys.argv[1] in ["bt", "bluetooth"]:
+        return CMD_BT
+    elif sys.argv[1] in ["ubt", "unbt", "unbluetooth"]:
+        return CMD_UBT
+    else:
+        print_usage()
+        sys.exit(0)
+
+
+def main():
+    cmd = parse_args()
+    if cmd == CMD_BG:
+        bg()
+    elif cmd == CMD_MOUNT:
+        mount()
+    elif cmd == CMD_UMOUNT:
+        umount()
+    elif cmd == CMD_DISP:
+        display()
+    elif cmd == CMD_ETH:
+        eth()
+    elif cmd == CMD_FS:
+        fs()
+    elif cmd == CMD_UFS:
+        ufs()
+    elif cmd == CMD_HELP:
+        print_usage()
+    elif cmd == CMD_FZF:
+        fz()
+    elif cmd == CMD_BT:
+        bt()
+    elif cmd == CMD_UBT:
+        ubt()
+    else:
+        print("Unknown command")
+        print_usage()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
