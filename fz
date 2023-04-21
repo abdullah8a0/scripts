@@ -3,6 +3,7 @@
 import sys
 import os
 import subprocess
+import configparser
 
 _iota = 0
 
@@ -30,23 +31,18 @@ NUM_CMDS = iota()
 HOME = os.environ["HOME"]
 COPY_CMD = "wl-copy"
 
-sshfs_lookup = {
-        "/afs/csail.mit.edu/u/a/aabi/linux":
-        ["aabi", "unicorn.csail.mit.edu",
-         HOME + "/remote/linux", "!8qG%gcO22rA"],
-        "/afs/csail.mit.edu/u/a/aabi/opensbi":
-        ["aabi", "unicorn.csail.mit.edu",
-         HOME+"/remote/opensbi", "!8qG%gcO22rA"],
-        "/home/abd880-shd/spectre-abdullah8a0":
-        ["abd880-shd", "arch-sec-2.csail.mit.edu",
-         HOME+"/remote/lab3", "oRoJeK60ytmU"],
-        "/home/abd880-shd/rowhammer-abdullah8a0":
-        ["abd880-shd", "arch-sec-1.csail.mit.edu",
-         HOME+"/remote/lab4", "supersecure"],
-        "/afs/athena.mit.edu/user/a/b/abd880":
-        ["abd880", "athena.dialup.mit.edu",
-         HOME+"/remote/athena", "AQR6p%6v^uMt"],
-}
+
+def parse_conf():
+    config = configparser.ConfigParser()
+    config.read(os.path.join(HOME, ".scripts", "bin", "fz.ini"))
+
+    SSHFS = {}
+    for k, v in config["SSHFS"].items():
+        SSHFS[k] = k.split(" ")[1] + " " + v
+    return SSHFS
+
+
+sshfs_lookup = parse_conf()
 
 
 def call_fzf(lin, **kwargs):
@@ -182,51 +178,81 @@ def eth():
 
 
 def fs():
-    filesys = list(sshfs_lookup.keys())
+    filesys = []
+    mounted_systems = subprocess.run(["cat", "/etc/mtab"],
+                                     stdout=subprocess.PIPE)
+    mounted_ = []
+    for line in mounted_systems.stdout.decode().splitlines():
+        if "sshfs" in line:
+            mounted_.append(line.split(":")[-1].split()[0])
+
+    for key, val in sshfs_lookup.items():
+        if val.split()[1] not in mounted_:
+            filesys.append(key)
+
     choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
 
     if choice == "":
         return
 
-    os.system("mkdir -p " + sshfs_lookup[choice][2])
-    os.system("echo " + sshfs_lookup[choice][3] + " | " + COPY_CMD)
-    os.system("sshfs " + sshfs_lookup[choice][0] + "@"
-              + sshfs_lookup[choice][1] + ":"
-              + choice + " "
-              + sshfs_lookup[choice][2])
-    # cd into the directory
+    fs_cmd = sshfs_lookup[choice].split(" ")
 
-    os.chdir(sshfs_lookup[choice][2])
+    # fs_cmd: username@host remote_dir local_dir password
+
+    os.system("mkdir -p " + fs_cmd[2])
+    os.system("echo " + fs_cmd[3] + " | " + COPY_CMD)
+    os.system("sshfs " + fs_cmd[0] + ":" + fs_cmd[1] + " " + fs_cmd[2])
+
     return
 
 
 def ufs():
-    filesys = list(sshfs_lookup.keys())
+    filesys = []
+    mounted_systems = subprocess.run(["cat", "/etc/mtab"],
+                                     stdout=subprocess.PIPE)
+
+    mounted_ = []
+    for line in mounted_systems.stdout.decode().splitlines():
+        if "sshfs" in line:
+            mounted_.append(line.split(":")[-1].split()[0])
+
+    for key, val in sshfs_lookup.items():
+        if val.split()[1] in mounted_:
+            filesys.append(key)
+
     choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
 
     if choice == "":
         return
 
-    os.system("fusermount -u " + sshfs_lookup[choice][2])
+    fs_cmd = sshfs_lookup[choice].split(" ")
+
+    os.system("fusermount -u " + fs_cmd[2])
 
     return
 
 
-bg_tags = "bg background image wallpaper Picture Pictures pic\
-        pics image images"
-mount_tags = "mount mountp usb drive drives cd CD dvd DVD flash \
-        flashdrive flashdrives memory stick thumbdrive thunderbolt"
-umount_tags = "umount unmount unmountp remove eject unplug unplugp"
-display_tags = "display monitor screen screens multi dual dualscreen \
-        dualscreens mirror extend extendscreen"
-eth_tags = "internet eth ethernet network networks wifi wifis wlan \
-        wlans lan lans wireless connect connected connection connections"
-remote_fs_tags = "remote remotefs remotefilesystem remotefilesystems \
-        remote_fs remote_fs remote_filesystem remote_filesystems fileserve fs"
-unremote_fs_tags = "unremote unremotefs unremotefilesystems \
-        unremote_fs unremote_fs removefilesystem disconnect ufs unfs"
-bt_tags = "bluetooth bt"
-unbt_tags = "unbluetooth ubt unbt"
+bg_tags = ["bg", "background", "image", "wallpaper", "Picture", "Pictures",
+           "pic", "pics", "image", "images"]
+mount_tags = ["mount", "mountp", "usb", "drive", "drives", "cd", "CD", "dvd",
+              "DVD", "flash", "flashdrive", "flashdrives", "memory", "stick",
+              "thumbdrive", "thunderbolt"]
+umount_tags = ["umount", "unmount", "unmountp", "remove", "eject", "unplug",
+               "unplugp"]
+display_tags = ["display", "monitor", "screen", "screens", "multi", "dual",
+                "dualscreen", "dualscreens", "mirror", "extend", "extendscreen"
+                ]
+eth_tags = ["ethernet", "eth", "network", "networks", "wifi", "wifis",
+            "wlan", "wlans", "lan", "lans", "wireless", "connect",
+            "connected", "connection", "connections"]
+remote_fs_tags = ["remote", "remotefs", "remotefilesystem",
+                  "remotefilesystems", "remote_fs", "remote_fs",
+                  "remote_filesystem", "remote_filesystems", "fileserve", "fs"]
+unremote_fs_tags = ["unremote", "unremotefs", "unremotefilesystems",
+                    "unremote_fs", "unremote_fs", "removefilesystem",
+                    "disconnect", "ufs", "unfs"]
+bt_tags = ["bluetooth", "bt"]
+unbt_tags = ["unbluetooth", "ubt", "unbt"]
 
 
 tags = [
@@ -236,16 +262,17 @@ tags = [
 tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt]
 
 assert len(tags) == len(tags_fun)
-assert len(tags) == NUM_CMDS-3
+assert len(tags) == NUM_CMDS-3  # -3 because of fz,disp,help
 
 
 def fz():
-    choice = call_fzf("\n".join(tags), prompt="Select a tag: ")
+    choice = call_fzf("\n".join([", ".join(x) for x in tags]),
+                      prompt="Select a tag: ")
 
     if choice == "":
         return
 
-    index = tags.index(choice)
+    index = tags.index(choice.split(", "))
     tags_fun[index]()
     return
 
@@ -281,17 +308,17 @@ def parse_args():
         return CMD_DISP
     elif sys.argv[1] in ["e", "eth", "ethernet"]:
         return CMD_ETH
-    elif sys.argv[1] in ["fs", "remotefs"]:
+    elif sys.argv[1] in ["f", "fs", "remotefs"]:
         return CMD_FS
-    elif sys.argv[1] in ["ufs", "unmountfs", "unfs"]:
+    elif sys.argv[1] in ["uf", "ufs", "unmountfs", "unfs"]:
         return CMD_UFS
     elif sys.argv[1] in ["h", "help"]:
         return CMD_HELP
     elif sys.argv[1] in ["fz", "fzf"]:
         return CMD_FZF
-    elif sys.argv[1] in ["bt", "bluetooth"]:
+    elif sys.argv[1] in ["b", "bt", "bluetooth"]:
         return CMD_BT
-    elif sys.argv[1] in ["ubt", "unbt", "unbluetooth"]:
+    elif sys.argv[1] in ["ub", "ubt", "unbt", "unbluetooth"]:
         return CMD_UBT
     else:
         print_usage()
