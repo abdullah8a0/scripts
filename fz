@@ -25,6 +25,7 @@ CMD_HELP = iota()
 CMD_FZF = iota()
 CMD_BT = iota()
 CMD_UBT = iota()
+CMD_SSH = iota()
 
 NUM_CMDS = iota()
 
@@ -45,7 +46,7 @@ def parse_conf():
 sshfs_lookup = parse_conf()
 
 
-def call_fzf(lin, **kwargs):
+def call_fzf(lin: str, **kwargs):
     args = ["fzf"]
     for k, v in kwargs.items():
         args.append("--" + k)
@@ -59,7 +60,7 @@ def call_fzf(lin, **kwargs):
         args.append("--reverse")
 
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    out, err = p.communicate(lin.encode())
+    out, _ = p.communicate(lin.encode())
     return out.decode().strip()
 
 
@@ -96,22 +97,21 @@ def ubt():
 
 
 def bg():
-    pics = os.listdir("/home/abdullah/Pictures/Wallpapers")
+    picdir = "/home/abdullah/Pictures/Wallpapers"
+    pics = os.listdir(picdir)
     choice = call_fzf("random\n"+"\n".join(pics),
                       prompt="Select a background: ",
                       preview="swaymsg output '*' \
-                              bg /home/abdullah/Pictures/Wallpapers/{} fill",
+                              bg " + picdir + "/{} fill",
+
                       **{"preview-window": "0%"})
     if choice == "":
         return
+
     # Using sway on Wayland
     if choice == "random":
-        os.system("swaymsg output '*' bg /home/abdullah/Pictures/$(ls \
-                /home/abdullah/Pictures/Wallpapers | shuf -n 1) fill")
-    else:
-        os.system("swaymsg output '*' bg /home/abdullah/Pictures/"
-                  + choice + " fill")
-    return
+        os.system("swaymsg output '*' bg " + picdir + "/$(ls "
+                  + picdir + "| shuf -n 1) fill")
 
 
 base_lsblk = [
@@ -125,12 +125,12 @@ def mount():
                           stdout=subprocess.PIPE)
     p3 = subprocess.Popen(["awk", "{print $1}"], stdin=p2.stdout,
                           stdout=subprocess.PIPE)
-    p1.stdout.close()
-    p2.stdout.close()
-    out, err = p3.communicate()
-    points = out.decode().splitlines()
-    for i in base_lsblk:
-        points = [x for x in points if x != i]
+    if p1.stdout:
+        p1.stdout.close()
+    if p2.stdout:
+        p2.stdout.close()
+    out, _ = p3.communicate()
+    points = filter(lambda x: x not in base_lsblk, out.decode().splitlines())
     choice = call_fzf("\n".join(points), prompt="Select a mount point: ")
 
     if choice == "":
@@ -150,12 +150,13 @@ def umount():
                           stdout=subprocess.PIPE)
     p3 = subprocess.Popen(["awk", "{print $1}"], stdin=p2.stdout,
                           stdout=subprocess.PIPE)
-    p1.stdout.close()
-    p2.stdout.close()
-    out, err = p3.communicate()
-    points = out.decode().splitlines()
-    for i in base_lsblk:
-        points = [x for x in points if x != i]
+
+    if p1.stdout:
+        p1.stdout.close()
+    if p2.stdout:
+        p2.stdout.close()
+    out, _ = p3.communicate()
+    points = filter(lambda x: x not in base_lsblk, out.decode().splitlines())
     choice = call_fzf("\n".join(points), prompt="Select a mount point: ")
 
     if choice == "":
@@ -232,6 +233,28 @@ def ufs():
     return
 
 
+def ssh():
+    hosts = {}
+    host_to_name = {}
+    for key, val in sshfs_lookup.items():
+        pswd = val.split()[-1]
+        name, host = key.split(" ")
+        hosts[(name, host)] = pswd
+        host_to_name[host] = name
+
+    choice = call_fzf("\n".join(sshfs_lookup.keys()),
+                      prompt="Select a host: ")
+
+    if choice == "":
+        return
+    choice = tuple(choice.split(" "))
+
+    os.system("echo " + hosts[choice] + " | " + COPY_CMD)
+    os.system("ssh " + choice[1] + " -t zsh")
+
+    return
+
+
 bg_tags = ["bg", "background", "image", "wallpaper", "Picture", "Pictures",
            "pic", "pics", "image", "images"]
 mount_tags = ["mount", "mountp", "usb", "drive", "drives", "cd", "CD", "dvd",
@@ -253,13 +276,14 @@ unremote_fs_tags = ["unremote", "unremotefs", "unremotefilesystems",
                     "disconnect", "ufs", "unfs"]
 bt_tags = ["bluetooth", "bt"]
 unbt_tags = ["unbluetooth", "ubt", "unbt"]
+ssh_tags = ["ssh", "remoteshell" "shell"]
 
 
 tags = [
         bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
-        remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags
+        remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags, ssh_tags
         ]
-tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt]
+tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt, ssh]
 
 assert len(tags) == len(tags_fun)
 assert len(tags) == NUM_CMDS-3  # -3 because of fz,disp,help
@@ -284,6 +308,7 @@ def print_usage():
     print("  bg      - select a background, then set it, the input files are from ~/Pictures")
     print("  mount   - select a mount point, then mount it")
     print("  umount  - select a mount point, then unmount it")
+    print("  ssh     - select a host, then ssh into it")
     print("  disp    - select a monitor using randr, then ask where to display it")
     print("  eth     - run ifplugd to connect to the internet")
     print("  fs      - select a filesystem, particulary remote, then mount it")
@@ -293,66 +318,38 @@ def print_usage():
     print("  help    - print this help message")
 
 
-def parse_args():
-    if len(sys.argv) != 2:
-        print_usage()
-        sys.exit(0)
-
-    if sys.argv[1] in ["bg"]:
-        return CMD_BG
-    elif sys.argv[1] in ["m", "mount"]:
-        return CMD_MOUNT
-    elif sys.argv[1] in ["um", "umount"]:
-        return CMD_UMOUNT
-    elif sys.argv[1] in ["d", "disp", "display"]:
-        return CMD_DISP
-    elif sys.argv[1] in ["e", "eth", "ethernet"]:
-        return CMD_ETH
-    elif sys.argv[1] in ["f", "fs", "remotefs"]:
-        return CMD_FS
-    elif sys.argv[1] in ["uf", "ufs", "unmountfs", "unfs"]:
-        return CMD_UFS
-    elif sys.argv[1] in ["h", "help"]:
-        return CMD_HELP
-    elif sys.argv[1] in ["fz", "fzf"]:
-        return CMD_FZF
-    elif sys.argv[1] in ["b", "bt", "bluetooth"]:
-        return CMD_BT
-    elif sys.argv[1] in ["ub", "ubt", "unbt", "unbluetooth"]:
-        return CMD_UBT
-    else:
-        print_usage()
-        sys.exit(0)
-
-
 def main():
-    cmd = parse_args()
-    if cmd == CMD_BG:
-        bg()
-    elif cmd == CMD_MOUNT:
-        mount()
-    elif cmd == CMD_UMOUNT:
-        umount()
-    elif cmd == CMD_DISP:
-        display()
-    elif cmd == CMD_ETH:
-        eth()
-    elif cmd == CMD_FS:
-        fs()
-    elif cmd == CMD_UFS:
-        ufs()
-    elif cmd == CMD_HELP:
+    if len(sys.argv) == 1:
         print_usage()
-    elif cmd == CMD_FZF:
-        fz()
-    elif cmd == CMD_BT:
-        bt()
-    elif cmd == CMD_UBT:
-        ubt()
-    else:
-        print("Unknown command")
-        print_usage()
-        sys.exit(1)
+        sys.exit(0)
+    match sys.argv[1]:
+        case  "fz" | "fzf":
+            fz()
+        case "bg":
+            bg()
+        case "m" | "mount":
+            mount()
+        case "um" | "umount":
+            umount()
+        case "d" | "disp" | "display":
+            display()
+        case "e" | "eth" | "ethernet":
+            eth()
+        case "f" | "fs" | "remotefs":
+            fs()
+        case "uf" | "ufs" | "unmountfs" | "unfs":
+            ufs()
+        case "h" | "help":
+            print_usage()
+        case "b" | "bt":
+            bt()
+        case "ubt":
+            ubt()
+        case "ssh":
+            ssh()
+        case _:
+            print_usage()
+            sys.exit(0)
 
 
 if __name__ == "__main__":

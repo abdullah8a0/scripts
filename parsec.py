@@ -1,139 +1,179 @@
 #!/usr/bin/env python
 
-import re
 import sys
 import graphlib
+from typing import Callable, Dict, List, Set, Tuple
+import tree_sitter
 
 # Usage: python parsec.py <input_file> [output_file]
 # If no output file is specified, the output will be written to stdout
 # The input file should be a valid c file.
 
 
+class SyntaxTree:
+    """
+    Monadic syntax tree
+    to simplify tree-sitter queries
+    """
+
+    def make(self, nodes: List[tree_sitter.Node] |
+             tree_sitter.Node) -> 'SyntaxTree':
+        if isinstance(nodes, tree_sitter.Node):
+            self.nodes = [nodes]
+        else:
+            self.nodes = nodes[:]
+        return self
+
+    def __len__(self):
+        return len(self.nodes)
+
+    def __getitem__(self, i):
+        return self.nodes[i]
+
+    def __iter__(self):
+        return iter(self.nodes)
+
+    def __rshift__(self, q: str | Callable[[tree_sitter.Node], 'SyntaxTree']) \
+            -> 'SyntaxTree':
+        """
+        Sumplify using __rshift__ operator
+        self.unit() >> q1 >> q2 >> q3
+        """
+        if isinstance(q, str):
+            return self.bind(q, self)
+        return self.flat_map(q, self)
+
+    def __init__(self, file):
+
+        self.nodes: List[tree_sitter.Node] = []
+        # migrate to tree-sitter
+        parser = tree_sitter.Parser()
+        # To C
+        tree_sitter.Language.build_library(
+            # Store the library in the `build` directory
+            '/home/abdullah/.scripts/build/my-languages.so',
+            # Include one or more languages
+            ["/home/abdullah/.scripts/tree-sitter-c"]
+        )
+        self.lang = tree_sitter.Language(
+            "/home/abdullah/.scripts/build/my-languages.so", "c")
+        parser.set_language(self.lang)
+        self.tree = parser.parse(bytes('\n'.join(file), 'utf-8'))
+
+    def flat_map(self, f: Callable[[tree_sitter.Node], 'SyntaxTree'],
+                 xs: 'SyntaxTree') -> 'SyntaxTree':
+
+        y: List[tree_sitter.Node] = []
+        for x in xs.nodes:
+            nodes = f(x)
+            if isinstance(nodes, SyntaxTree):
+                y.extend(nodes.nodes)
+            elif isinstance(nodes, list):
+                y.extend(nodes)
+            elif isinstance(nodes, str):
+                y.append(nodes)
+        return self.make(y)
+
+    def unit(self, n: List[tree_sitter.Node] | tree_sitter.Node = []) \
+            -> 'SyntaxTree':
+        if not n:
+            return self.make(self.tree.root_node)
+        return self.make(n)
+
+    def bind(self, q: str, ns: 'SyntaxTree') -> 'SyntaxTree':
+        query = self.lang.query(q)
+        return self.flat_map(
+            lambda n: self.make([
+                node for node, _ in query.captures(n)]), ns)
+
+
 class Parsec:
-    def __init__(self, input_file, output_file):
+    def __init__(self, input_file):
         self.input_file = input_file
-        self.output_file = output_file
+        self.common_funcs = {
+            "printf", "scanf", "malloc", "free", "strcpy", "strcat", "strlen",
+            "strcmp", "strchr", "strstr", "strtok", "strncpy", "strncat",
+            "calloc", "realloc", "memcpy", "memmove", "memcmp", "memset",
+            "abort", "exit", "atexit", "getenv", "system", "bsearch",
+            "fprintf", "fscanf", "fopen", "fclose", "fgetc", "fputc",
+            "panic", "BIT", "assert", "max", "min"}
 
     def parse(self):
-        # return dictionary of: function name -> function body
-        file, line_map = self.read_input()
-        [line_numbers, functions, func_name] = self.get_functions(file)
-        function_bodies = self.get_function_bodies(file, line_numbers)
 
-        func_calls = self.get_func_calls(function_bodies)
-        self.func_def_line = {}
-        for i, func in enumerate(func_name):
-            self.func_def_line[func] = line_map[line_numbers[i]]
-
-        self.func_name_to_sig = dict(zip(func_name, functions))
-
-        self.undefined_func_calls = set()
-        for i, func_call in enumerate(func_calls):
-            for j, call in enumerate(func_call):
-                if call not in func_name:
-                    self.undefined_func_calls.add(call)
-
-        self.calls = dict(zip(func_name, func_calls))
-
-    def read_order(self):
-        call_graph = self.calls
-        undef = self.undefined_func_calls
-        line_map = self.func_def_line
-
-        tp = graphlib.TopologicalSorter(call_graph)
-        dag, cycles = self.clean_graph(tp, call_graph)
-        print(f"cycles: {' => '.join(cycles) if cycles else None}")
-        print("")
-        tp = graphlib.TopologicalSorter(dag)
-        print("Reading order: ")
-        for func in tp.static_order():
-            print(f"{line_map.get(func, 'undefined')} : \
-                  {self.func_name_to_sig.get(func,func)} ")
-        print("")
-        if undef:
-            print("Undefined function calls: ", undef)
-
-    def clean_graph(self, tp, call_graph):
-        try:
-            tp.prepare()
-            return call_graph, None
-        except graphlib.CycleError as e:
-            cycles = e.args[1]
-            for func in cycles:
-                if func in call_graph:
-                    del call_graph[func]
-            return call_graph, cycles
-
-    def get_functions(self, file):
-        # return list of function names and list of line numbers
-        # where the function definitions start
-
-        func_regex = re.compile(r'(\w+\s+)+(\w+\s*)\([^!@\#$+%]*?\)')
-        functions = []
-        line_numbers = []
-        func_name = []
-        for i, line in enumerate(file):
-            if func_regex.match(line):
-                # append the function signature.
-                sig = func_regex.match(line).group(0).strip()
-                return_type = func_regex.match(line).group(1).strip()
-                name = func_regex.match(line).group(2).strip()
-                if return_type == 'return':
-                    continue
-                functions.append(sig)
-                func_name.append(name)
-                line_numbers.append(i)
-        return [line_numbers, functions, func_name]
-
-    def get_function_bodies(self, file, line_numbers):
-        # return list of function bodies
-        # line_numbers is a list of line numbers where the function
-        # definitions start
-
-        function_bodies = []
-        for i, line_number in enumerate(line_numbers):
-            # if the function is the last function in the file
-            if i == len(line_numbers) - 1:
-                function_bodies.append(file[line_number+1:])
-            else:
-                function_bodies.append(file[line_number+1:line_numbers[i+1]])
-        return list(map(lambda x: ' '.join(x), function_bodies))
-
-    def get_func_calls(self, function_bodies):
-        # print the function calls in the function bodies
-        func_call_regex = re.compile(
-                r'(?!\b(if|while|for|switch|else)\b)\b(\w+)(?=\s*\()')
-        func_calls = []
-        for i, function_body in enumerate(function_bodies):
-            func_calls.append(list(map(
-                lambda x: x.group(2), func_call_regex.finditer(
-                    function_body))))
-
-        std_funcs = {
-                     'scanf', 'printf', 'strlen', 'if', 'max', 'min', 'return'
-                     }
-        return list(map(lambda x: set(filter(
-            lambda y: y not in std_funcs, x)), func_calls))
-
-    def read_input(self):
-        # return list of lines in the input file and a dictionary
-        # mapping new line numbers to old line numbers
-        # clean up the input file by removing comments and extra whitespace
         with open(self.input_file, 'r') as f:
             file = f.readlines()
             file = list(map(lambda x: x.strip(), file))
-            line_map = {}
-            new_file = []
+            self.file = file
 
-            for i, line in enumerate(file):
-                if line.startswith('//'):
-                    continue
-                elif '//' in line:
-                    line = line[:line.index('//')]
-                if line:
-                    line_map[len(new_file)] = i
-                    new_file.append(line)
-            return [new_file, line_map]
+        self.st = SyntaxTree(file)
+
+        names_query = """(function_definition
+                            (function_declarator
+                             (identifier) @name))"""
+
+        body_query = """(function_definition
+                         (function_declarator
+                          (identifier))
+                         body:
+                         (compound_statement) @body)"""
+
+        call_query = """(call_expression
+                         function: (_) @f)"""
+
+        func_name: List[tree_sitter.Node] = (
+            self.st.unit()
+            >> names_query
+            >> (lambda n: n.text.decode('utf-8'))).nodes
+
+        self.def_loc = dict(zip(
+            func_name, map(lambda n: n.start_point[0] + 1,
+                           self.st.unit() >> body_query)))
+
+        func_calls = [set([
+            call.text.decode('utf-8') for call in
+            self.st.unit(body) >> call_query])
+            for body in self.st.unit() >> body_query]
+
+        self.undefined_func_calls: Set[str] = set(
+            call for body in func_calls for call in body
+            if call not in func_name and call not in self.common_funcs)
+
+        self.calls: Dict[str, str] = dict(zip(func_name, func_calls))
+        return self
+
+    def read_order(self):
+        dag, cycles = self.clean_graph(self.calls)
+        for cycle in cycles:
+            print(f"cycle: {' => '.join(cycle)}")
+        print("")
+        tp = graphlib.TopologicalSorter(dag)
+        print("Reading order: ")
+        # TODO:hide undefined functions
+        for func in tp.static_order():
+            if func in self.def_loc:
+                print(f"{self.def_loc.get(func, 'UD')} : \
+                  {func}")
+        print("")
+        if self.undefined_func_calls:
+            print("Undefined function calls: ", self.undefined_func_calls)
+
+    def clean_graph(self, call_graph: Dict[str, str]) \
+            -> Tuple[Dict[str, str], List[List[str]]]:
+
+        tp = graphlib.TopologicalSorter(call_graph)
+
+        cycles: List[List[str]] = []
+        while True:
+            try:
+                tp.prepare()
+                return (call_graph, cycles)
+            except graphlib.CycleError as e:
+                cycle: List[str] = list(e.args[1])
+                for func in cycle:
+                    if func in call_graph:
+                        del call_graph[func]
+                cycles.append(cycle)
+                tp = graphlib.TopologicalSorter(call_graph)
 
 
 def main():
@@ -141,13 +181,14 @@ def main():
         print("Usage: python parsec.py <input_file> [output_file]")
         sys.exit(1)
     input_file = sys.argv[1]
-    if len(sys.argv) > 2:
-        output_file = sys.argv[2]
-    else:
-        output_file = None
-    parsec = Parsec(input_file, output_file)
-    parsec.parse()
-    parsec.read_order()
+    if input_file == "demo":
+        return
+
+    if len(sys.argv) >= 2:
+        for input_file in sys.argv[1:]:
+            print(f"Input file: {input_file}")
+            Parsec(input_file).parse().read_order()
+            print("")
 
 
 if __name__ == "__main__":
