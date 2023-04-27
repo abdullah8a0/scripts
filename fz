@@ -5,32 +5,11 @@ import os
 import subprocess
 import configparser
 
-_iota = 0
-
-
-def iota():
-    global _iota
-    _iota += 1
-    return _iota
-
-
-CMD_BG = iota()
-CMD_MOUNT = iota()
-CMD_UMOUNT = iota()
-CMD_DISP = iota()
-CMD_ETH = iota()
-CMD_FS = iota()
-CMD_UFS = iota()
-CMD_HELP = iota()
-CMD_FZF = iota()
-CMD_BT = iota()
-CMD_UBT = iota()
-CMD_SSH = iota()
-
-NUM_CMDS = iota()
 
 HOME = os.environ["HOME"]
 COPY_CMD = "wl-copy"
+
+# helpers
 
 
 def parse_conf():
@@ -43,7 +22,7 @@ def parse_conf():
     return SSHFS
 
 
-sshfs_lookup = parse_conf()
+glob_ssfs_lookup = parse_conf()
 
 
 def call_fzf(lin: str, **kwargs):
@@ -64,10 +43,18 @@ def call_fzf(lin: str, **kwargs):
     return out.decode().strip()
 
 
+def notify(msg: str):
+    dunst = subprocess.run(
+        ["notify-send", "-h", "string:bgcolor:#2e3440",
+         "-h", "string:fgcolor:#d8dee9 ", msg])
+    return dunst.returncode
+
+# The command handlers
+
+
 def bt():
     devices = subprocess.run(["bluetoothctl", "devices"],
-                             stdout=subprocess.PIPE)
-    devices = devices.stdout.decode().splitlines()
+                             stdout=subprocess.PIPE).stdout.decode().splitlines()
     devices = [x.split() for x in devices]
     names = [" ".join(x[2:]) for x in devices]
     ids = [x[1] for x in devices]
@@ -76,7 +63,12 @@ def bt():
     if choice == "":
         return
 
-    subprocess.run(["bluetoothctl", "connect", ids[names.index(choice)]])
+    code = subprocess.run(
+        ["bluetoothctl", "connect", ids[names.index(choice)]])
+    if code.returncode == 0:
+        notify("Bluetooth connected to " + choice)
+    else:
+        notify("Bluetooth connection failed")
     return
 
 
@@ -93,6 +85,7 @@ def ubt():
         return
 
     subprocess.run(["bluetoothctl", "disconnect", ids[names.index(choice)]])
+    notify("Bluetooth disconnected from " + choice)
     return
 
 
@@ -110,13 +103,19 @@ def bg():
 
     # Using sway on Wayland
     if choice == "random":
+        notify("Setting background to a random picture")
         os.system("swaymsg output '*' bg " + picdir + "/$(ls "
                   + picdir + "| shuf -n 1) fill")
 
+    else:
+        notify("Setting background to " + choice)
+        # The preview window does the job
+        return
+
 
 base_lsblk = [
-        "nvme0n1", "nvme0n1p1", "nvme0n1p2", "nvme0n1p3", "nvme0n1p4",
-        "nvme0n1p5", "nvme0n1p6", "nvme0n2", "nvme0n3"]
+    "nvme0n1", "nvme0n1p1", "nvme0n1p2", "nvme0n1p3", "nvme0n1p4",
+    "nvme0n1p5", "nvme0n1p6", "nvme0n2", "nvme0n3"]
 
 
 def mount():
@@ -136,19 +135,21 @@ def mount():
     if choice == "":
         return
 
-    os.system("mkdir -p " + "/mnt/" + choice)
-    os.system("sudo chown -R abdullah " + "/mnt/" + choice)
+    mount_dir = HOME + "/mounts/" + choice
 
-    subprocess.run(["sudo", "mount", "/dev/" + choice, "/mnt/" + choice,
+    os.system("mkdir -p " + mount_dir)
+
+    subprocess.run(["sudo", "mount", "/dev/" + choice, mount_dir,
                     "-o", "uid=abdullah,gid=abdullah"])
+    notify("Mounted " + choice + " to " + mount_dir)
     return
 
 
 def umount():
     p1 = subprocess.Popen(["lsblk", "-l"], stdout=subprocess.PIPE)
-    p2 = subprocess.Popen(["grep", "-E", "part"], stdin=p1.stdout,
+    p2 = subprocess.Popen(["grep", "-e", "part"], stdin=p1.stdout,
                           stdout=subprocess.PIPE)
-    p3 = subprocess.Popen(["awk", "{print $1}"], stdin=p2.stdout,
+    p3 = subprocess.Popen(["awk", "{print $1,$7}"], stdin=p2.stdout,
                           stdout=subprocess.PIPE)
 
     if p1.stdout:
@@ -156,13 +157,17 @@ def umount():
     if p2.stdout:
         p2.stdout.close()
     out, _ = p3.communicate()
-    points = filter(lambda x: x not in base_lsblk, out.decode().splitlines())
+    points = filter(lambda x: x.split()[
+                    0] not in base_lsblk, out.decode().splitlines())
     choice = call_fzf("\n".join(points), prompt="Select a mount point: ")
 
     if choice == "":
         return
 
-    subprocess.run(["sudo", "umount", "/mnt/" + choice])
+    name, mount_dir = choice.split()
+
+    subprocess.run(["sudo", "umount", mount_dir])
+    notify("Unmounted " + name + " from " + mount_dir)
     return
 
 
@@ -174,7 +179,7 @@ def display():
 def eth():
     ret = subprocess.run(["sudo", "ifplugd"])
     if ret.returncode == 0:
-        print("Ethernet connected")
+        notify("Ethernet cable plugged in")
     return
 
 
@@ -187,7 +192,7 @@ def fs():
         if "sshfs" in line:
             mounted_.append(line.split(":")[-1].split()[0])
 
-    for key, val in sshfs_lookup.items():
+    for key, val in glob_ssfs_lookup.items():
         if val.split()[1] not in mounted_:
             filesys.append(key)
 
@@ -196,13 +201,15 @@ def fs():
     if choice == "":
         return
 
-    fs_cmd = sshfs_lookup[choice].split(" ")
+    fs_cmd = glob_ssfs_lookup[choice].split(" ")
 
     # fs_cmd: username@host remote_dir local_dir password
 
     os.system("mkdir -p " + fs_cmd[2])
     os.system("echo " + fs_cmd[3] + " | " + COPY_CMD)
     os.system("sshfs " + fs_cmd[0] + ":" + fs_cmd[1] + " " + fs_cmd[2])
+
+    notify("Mounted " + choice + " to " + fs_cmd[2])
 
     return
 
@@ -217,7 +224,7 @@ def ufs():
         if "sshfs" in line:
             mounted_.append(line.split(":")[-1].split()[0])
 
-    for key, val in sshfs_lookup.items():
+    for key, val in glob_ssfs_lookup.items():
         if val.split()[1] in mounted_:
             filesys.append(key)
 
@@ -226,9 +233,11 @@ def ufs():
     if choice == "":
         return
 
-    fs_cmd = sshfs_lookup[choice].split(" ")
+    fs_cmd = glob_ssfs_lookup[choice].split(" ")
 
     os.system("fusermount -u " + fs_cmd[2])
+
+    notify("Unmounted " + choice + " from " + fs_cmd[2])
 
     return
 
@@ -236,22 +245,27 @@ def ufs():
 def ssh():
     hosts = {}
     host_to_name = {}
-    for key, val in sshfs_lookup.items():
+    for key, val in glob_ssfs_lookup.items():
         pswd = val.split()[-1]
         name, host = key.split(" ")
         hosts[(name, host)] = pswd
         host_to_name[host] = name
 
-    choice = call_fzf("\n".join(sshfs_lookup.keys()),
+    choice = call_fzf("\n".join(glob_ssfs_lookup.keys()),
                       prompt="Select a host: ")
 
     if choice == "":
         return
     choice = tuple(choice.split(" "))
 
+    notify("Connected to " + host_to_name[choice[1]])
     os.system("echo " + hosts[choice] + " | " + COPY_CMD)
     os.system("ssh " + choice[1] + " -t zsh")
+    return
 
+
+def ytfzf():
+    subprocess.run(["ytfzf"])
     return
 
 
@@ -277,16 +291,17 @@ unremote_fs_tags = ["unremote", "unremotefs", "unremotefilesystems",
 bt_tags = ["bluetooth", "bt"]
 unbt_tags = ["unbluetooth", "ubt", "unbt"]
 ssh_tags = ["ssh", "remoteshell" "shell"]
+ytfzf_tags = ["ytfzf", "youtube", "yt", "video", "videos", "music", "song"]
 
 
 tags = [
-        bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
-        remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags, ssh_tags
-        ]
-tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt, ssh]
+    bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
+    remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags, ssh_tags,
+    ytfzf_tags
+]
+tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt, ssh, ytfzf]
 
 assert len(tags) == len(tags_fun)
-assert len(tags) == NUM_CMDS-3  # -3 because of fz,disp,help
 
 
 def fz():
@@ -315,6 +330,7 @@ def print_usage():
     print("  ufs     - select a filesystem, particulary remote, then unmount it")
     print("  bt      - select a bluetooth device, then connect to it")
     print("  ubt     - select a bluetooth device, then disconnect from it")
+    print("  ytfzf   - search youtube for a video, then play it using mpv")
     print("  help    - print this help message")
 
 
@@ -327,9 +343,9 @@ def main():
             fz()
         case "bg":
             bg()
-        case "m" | "mount":
+        case "m" | "mnt" | "mount":
             mount()
-        case "um" | "umount":
+        case "um" | "umnt" | "umount":
             umount()
         case "d" | "disp" | "display":
             display()
@@ -347,6 +363,8 @@ def main():
             ubt()
         case "ssh":
             ssh()
+        case "yt" | "ytfzf":
+            ytfzf()
         case _:
             print_usage()
             sys.exit(0)

@@ -43,21 +43,21 @@ class SyntaxTree:
             return self.bind(q, self)
         return self.flat_map(q, self)
 
-    def __init__(self, file):
+    def __init__(self, file, lang: str = "c"):
 
         self.nodes: List[tree_sitter.Node] = []
-        # migrate to tree-sitter
         parser = tree_sitter.Parser()
-        # To C
+
+        # add support for python cpp
         tree_sitter.Language.build_library(
-            # Store the library in the `build` directory
-            '/home/abdullah/.scripts/build/my-languages.so',
-            # Include one or more languages
-            ["/home/abdullah/.scripts/tree-sitter-c"]
+            '/home/abdullah/.scripts/build/lang.so',
+            ["/home/abdullah/.scripts/tree-sitter/tree-sitter-c"]
         )
         self.lang = tree_sitter.Language(
-            "/home/abdullah/.scripts/build/my-languages.so", "c")
-        parser.set_language(self.lang)
+            "/home/abdullah/.scripts/build/lang.so", "c")
+
+        if lang == "c":
+            parser.set_language(self.lang)
         self.tree = parser.parse(bytes('\n'.join(file), 'utf-8'))
 
     def flat_map(self, f: Callable[[tree_sitter.Node], 'SyntaxTree'],
@@ -74,7 +74,13 @@ class SyntaxTree:
                 y.append(nodes)
         return self.make(y)
 
-    def unit(self, n: List[tree_sitter.Node] | tree_sitter.Node = []) \
+    def text(self, n: List[tree_sitter.Node] = []) -> List[str]:
+        if not n:
+            return [n.text.decode('utf-8') for n in self.nodes]
+        else:
+            return [n.text.decode('utf-8') for n in n]
+
+    def unit(self, n: List[tree_sitter.Node] | tree_sitter.Node = [])\
             -> 'SyntaxTree':
         if not n:
             return self.make(self.tree.root_node)
@@ -97,15 +103,14 @@ class Parsec:
             "abort", "exit", "atexit", "getenv", "system", "bsearch",
             "fprintf", "fscanf", "fopen", "fclose", "fgetc", "fputc",
             "panic", "BIT", "assert", "max", "min"}
-
-    def parse(self):
-
         with open(self.input_file, 'r') as f:
             file = f.readlines()
             file = list(map(lambda x: x.strip(), file))
             self.file = file
 
         self.st = SyntaxTree(file)
+
+    def parse(self):
 
         names_query = """(function_definition
                             (function_declarator
@@ -120,19 +125,19 @@ class Parsec:
         call_query = """(call_expression
                          function: (_) @f)"""
 
-        func_name: List[tree_sitter.Node] = (
+        func_name: List[str] = (
             self.st.unit()
             >> names_query
-            >> (lambda n: n.text.decode('utf-8'))).nodes
+        ).text()
 
-        self.def_loc = dict(zip(
+        self.def_loc: Dict[str, int] = dict(zip(
             func_name, map(lambda n: n.start_point[0] + 1,
                            self.st.unit() >> body_query)))
 
-        func_calls = [set([
-            call.text.decode('utf-8') for call in
-            self.st.unit(body) >> call_query])
-            for body in self.st.unit() >> body_query]
+        func_calls: List[Set[str]] = [set((self.st.unit(body)
+                                           >> call_query).text())
+                                      for body in self.st.unit()
+                                      >> body_query]
 
         self.undefined_func_calls: Set[str] = set(
             call for body in func_calls for call in body
