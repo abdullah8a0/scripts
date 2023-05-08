@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# Notifies the current song playing on Spotifyd
+# ENVIRONMENT VARIABLES
+# ---------------------
+# POSITION_MS: The position in milliseconds
+# DURATION_MS: The duration in milliseconds
+# PLAYER_EVENT: The event that triggered the script (load, play, pause)
+# TRACK_ID: The track ID
+
+title=$(playerctl -p spotifyd metadata title)
+artist=$(playerctl -p spotifyd metadata artist)
+
+# Format: [playing] Artist - Title 
+#        [paused] Artist - Title
+
+if [[ $DURATION_MS -ne 0 ]]; then
+    percent=$((POSITION_MS * 100 / DURATION_MS))
+fi
+
+
+case $PLAYER_EVENT in
+    play)
+        notify-send -t 5000 -i spotify "Playing" "$title - $artist" -h int:value:$percent -h string:synchronous:volume
+        ;;
+    pause)
+        notify-send -t 5000 -i spotify "Paused" "$title - $artist" -h int:value:$percent -h string:synchronous:volume
+        ;;
+        preloading)
+            out=$(curl https://open.spotify.com/track/$TRACK_ID 2>/dev/null | pup 'meta[property=og:title],meta[property=og:description]'| sed "s|.*content=\"||" | sed "s|\">||" | sed "s| · .*||")
+            notify-send -t 5000 -i spotify "Up Next" "$out"
+
+        ;;  
+        *)
+        ;;
+esac
