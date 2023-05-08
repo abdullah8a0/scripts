@@ -1,13 +1,21 @@
-#!/bin/python3
+#!/usr/bin/python3
+
 
 import sys
 import os
 import subprocess
 import configparser
 
-
 HOME = os.environ["HOME"]
 COPY_CMD = "wl-copy"
+context = set()
+
+# Usage: fz [option]
+# Selector list: prompts the user to select an option from a list, then
+# performs the action associated with that option.
+
+# The scheme for the script is:
+# generate-options -> fzf -> perform-action => repeat
 
 # helpers
 
@@ -18,7 +26,7 @@ def parse_conf():
 
     SSHFS = {}
     for k, v in config["SSHFS"].items():
-        SSHFS[k] = k.split(" ")[1] + " " + v
+        SSHFS[k] = f"{k.split(' ')[1]} {v}"
     return SSHFS
 
 
@@ -28,7 +36,7 @@ glob_ssfs_lookup = parse_conf()
 def call_fzf(lin: str, **kwargs):
     args = ["fzf"]
     for k, v in kwargs.items():
-        args.append("--" + k)
+        args.append(f"--{k}")
         args.append(v)
     if "height" not in kwargs:
         args.append("--height")
@@ -43,10 +51,10 @@ def call_fzf(lin: str, **kwargs):
     return out.decode().strip()
 
 
-def notify(msg: str):
+def notify(msg: str, heading: str):
     dunst = subprocess.run(
         ["notify-send", "-h", "string:bgcolor:#2e3440",
-         "-h", "string:fgcolor:#d8dee9 ", msg])
+         "-h", "string:fgcolor:#d8dee9 ", heading, msg])
     return dunst.returncode
 
 # The command handlers
@@ -54,7 +62,10 @@ def notify(msg: str):
 
 def bt():
     devices = subprocess.run(["bluetoothctl", "devices"],
-                             stdout=subprocess.PIPE).stdout.decode().splitlines()
+                             stdout=subprocess.PIPE)\
+        .stdout\
+        .decode()\
+        .splitlines()
     devices = [x.split() for x in devices]
     names = [" ".join(x[2:]) for x in devices]
     ids = [x[1] for x in devices]
@@ -62,14 +73,21 @@ def bt():
 
     if choice == "":
         return
-
-    code = subprocess.run(
-        ["bluetoothctl", "connect", ids[names.index(choice)]])
-    if code.returncode == 0:
-        notify("Bluetooth connected to " + choice)
-    else:
-        notify("Bluetooth connection failed")
-    return
+    try:
+        code = subprocess.run(
+            ["bluetoothctl", "connect", ids[names.index(choice)]])
+        if code.returncode == 0:
+            notify(
+                "Connected to <span color='orange':" +
+                f"weight='bold'>{choice}</span>", "Bluetooth")
+        else:
+            notify("Bluetooth connection failed", "Bluetooth")
+        return
+    except KeyboardInterrupt:
+        notify("Bluetooth connection failed", "Bluetooth")
+        notify("<span color='orange'>" +
+               "Try adding the device to the trusted list</span>", "Bluetooth")
+        return
 
 
 def ubt():
@@ -85,17 +103,29 @@ def ubt():
         return
 
     subprocess.run(["bluetoothctl", "disconnect", ids[names.index(choice)]])
-    notify("Bluetooth disconnected from " + choice)
+    notify("Disconnected from <span color='orange' " +
+           f"weight='bold'>{choice}</span>", "Bluetooth")
     return
 
 
 def bg():
     picdir = "/home/abdullah/Pictures/Wallpapers"
-    pics = os.listdir(picdir)
-    choice = call_fzf("random\n"+"\n".join(pics),
+    pics = sorted(os.listdir(picdir), reverse=True)
+    if "a" in context:
+        os.system(
+            f"swaymsg output '*' bg {picdir}/$(ls {picdir}" +
+            "| rg 'a.*'| shuf -n 1) fill")
+        return
+    elif "w" in context:
+        os.system(
+            f"swaymsg output '*' bg {picdir}/$(ls {picdir}" +
+            "| rg 'w.*'| shuf -n 1) fill")
+        return
+
+    choice = call_fzf("random\narandom\n" + "\n".join(pics),
                       prompt="Select a background: ",
-                      preview="swaymsg output '*' \
-                              bg " + picdir + "/{} fill",
+                      preview="swaymsg output '*'" +
+                              f" bg { picdir }/{{}} fill",
 
                       **{"preview-window": "0%"})
     if choice == "":
@@ -103,12 +133,19 @@ def bg():
 
     # Using sway on Wayland
     if choice == "random":
-        notify("Setting background to a random picture")
-        os.system("swaymsg output '*' bg " + picdir + "/$(ls "
-                  + picdir + "| shuf -n 1) fill")
-
+        notify("Setting background to a random picture", "Background")
+        os.system(
+            f"swaymsg output '*' bg {picdir}/$(ls {picdir}" +
+            "| rg -v 'a.*'| shuf -n 1) fill")
+    elif choice == "arandom":
+        notify("Setting background to a random picture", "Background")
+        os.system(
+            f"swaymsg output '*' bg {picdir}/$(ls {picdir}" +
+            "| rg 'a.*'| shuf -n 1) fill")
     else:
-        notify("Setting background to " + choice)
+        notify(
+            f"Setting background to <span color='orange'>{choice}" +
+            "</span>", "Background")
         # The preview window does the job
         return
 
@@ -135,13 +172,15 @@ def mount():
     if choice == "":
         return
 
-    mount_dir = HOME + "/mounts/" + choice
+    mount_dir = f"{HOME}/mounts/{choice}"
 
-    os.system("mkdir -p " + mount_dir)
+    os.system(f"mkdir -p { mount_dir}")
 
-    subprocess.run(["sudo", "mount", "/dev/" + choice, mount_dir,
+    subprocess.run(["sudo", "mount", f"/dev/{choice}", mount_dir,
                     "-o", "uid=abdullah,gid=abdullah"])
-    notify("Mounted " + choice + " to " + mount_dir)
+    notify(
+        f"Mounted <span color='orange'>{ choice }</span>" +
+        f"to { mount_dir}", "Disk Mount")
     return
 
 
@@ -166,20 +205,26 @@ def umount():
 
     name, mount_dir = choice.split()
 
-    subprocess.run(["sudo", "umount", mount_dir])
-    notify("Unmounted " + name + " from " + mount_dir)
+    ret = subprocess.run(["sudo", "umount", mount_dir])
+    if ret.returncode == 0:
+        notify(
+            f"Unmounted <span color='orange'>{ name }</span>" +
+            f"from {mount_dir}", "Disk Unmount")
+    else:
+        notify("<span color='red'>Unmount failed</span>", "Disk Unmount")
     return
 
 
 def display():
-    print("display is not implemented yet")
+    notify("<span color='orange'>Display not implemented yet" +
+           "</span>", "Display")
     return
 
 
 def eth():
     ret = subprocess.run(["sudo", "ifplugd"])
     if ret.returncode == 0:
-        notify("Ethernet cable plugged in")
+        notify("Ethernet cable plugged in", "Network")
     return
 
 
@@ -205,11 +250,13 @@ def fs():
 
     # fs_cmd: username@host remote_dir local_dir password
 
-    os.system("mkdir -p " + fs_cmd[2])
-    os.system("echo " + fs_cmd[3] + " | " + COPY_CMD)
-    os.system("sshfs " + fs_cmd[0] + ":" + fs_cmd[1] + " " + fs_cmd[2])
+    os.system(f"mkdir -p { fs_cmd[2]}")
+    os.system(f"echo { fs_cmd[3] } | " + COPY_CMD)
+    os.system(f"sshfs { fs_cmd[0] }:{fs_cmd[1]} {fs_cmd[2]}")
 
-    notify("Mounted " + choice + " to " + fs_cmd[2])
+    notify(
+        f"Mounted <span color='orange'>{ choice }" +
+        f"</span> to {fs_cmd[2]}", "Remote Filesystem")
 
     return
 
@@ -235,9 +282,11 @@ def ufs():
 
     fs_cmd = glob_ssfs_lookup[choice].split(" ")
 
-    os.system("fusermount -u " + fs_cmd[2])
+    os.system(f"fusermount -u {fs_cmd[2]}")
 
-    notify("Unmounted " + choice + " from " + fs_cmd[2])
+    notify(
+        f"Unmounted <span color='orange'>{ choice }" +
+        f"</span> from {fs_cmd[2]}", "Remote Filesystem")
 
     return
 
@@ -248,24 +297,62 @@ def ssh():
     for key, val in glob_ssfs_lookup.items():
         pswd = val.split()[-1]
         name, host = key.split(" ")
-        hosts[(name, host)] = pswd
+        hosts[host] = pswd
         host_to_name[host] = name
 
-    choice = call_fzf("\n".join(glob_ssfs_lookup.keys()),
+    choice = call_fzf("\n".join(host_to_name.keys()),
                       prompt="Select a host: ")
 
     if choice == "":
         return
-    choice = tuple(choice.split(" "))
 
-    notify("Connected to " + host_to_name[choice[1]])
-    os.system("echo " + hosts[choice] + " | " + COPY_CMD)
-    os.system("ssh " + choice[1] + " -t zsh")
+    os.system(f"echo {hosts[choice]} | {COPY_CMD}")
+    cmd = f"ssh { choice } -t zsh"
+    p1 = subprocess.Popen(cmd.split())
+    notify(
+        f"Connecting to <span color='orange'>{host_to_name[choice]}" +
+        "</span>", "SSH")
+    try:
+        p1.wait()
+    except KeyboardInterrupt:
+        p1.kill()
+        notify("<span color='red'>SSH connection failed</span>", "SSH")
+        return
+    if p1.returncode != 0:
+        notify("<span color='red'>SSH connection failed</span>", "SSH")
     return
 
 
 def ytfzf():
-    subprocess.run(["ytfzf"])
+    subprocess.run(["ytfzf", "-lstf", "--force-youtube",
+                   "--notify-playing", "-T", "swayimg"])
+    return
+
+
+def passwd():
+    import re
+    import json
+    p1 = subprocess.run(["lpass", "ls"], stdout=subprocess.PIPE)
+    choice = call_fzf(p1.stdout.decode(), prompt="Select an account: ")
+
+    id = re.search(r"\d+", choice).group(0)
+    p2 = subprocess.run(["lpass", "show", "-j", id], stdout=subprocess.PIPE)
+
+    response = json.loads(p2.stdout.decode())[0]
+
+    name = f"<span color='#00ff00'>{response['name']}</span>"
+    passwd = response["password"]
+    username = f"<span color='orange'>{response['username']}</span>"
+
+    os.system(f"echo '{ passwd }' | " + COPY_CMD)
+    notify(
+        f"Password for <b>{name}: {username}" +
+        "</b> copied to clipboard", "LastPass")
+    return
+
+
+def waldl():
+    subprocess.run(["waldl"])
     return
 
 
@@ -292,82 +379,101 @@ bt_tags = ["bluetooth", "bt"]
 unbt_tags = ["unbluetooth", "ubt", "unbt"]
 ssh_tags = ["ssh", "remoteshell" "shell"]
 ytfzf_tags = ["ytfzf", "youtube", "yt", "video", "videos", "music", "song"]
+pass_tags = ["pass", "password", "passwords", "lpass", "lastpass", "lpassp"]
+waldl_tags = ["waldl", "wallhaven", "wallpaper", "wallpapers", "wallhaven.cc"]
 
 
 tags = [
     bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
     remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags, ssh_tags,
-    ytfzf_tags
+    ytfzf_tags, pass_tags, waldl_tags
+
 ]
-tags_fun = [bg, mount, umount, display, eth, fs, ufs, bt, ubt, ssh, ytfzf]
+tags_fun = [bg, mount, umount, display, eth,
+            fs, ufs, bt, ubt, ssh, ytfzf, passwd, waldl]
 
 assert len(tags) == len(tags_fun)
 
 
 def fz():
-    choice = call_fzf("\n".join([", ".join(x) for x in tags]),
-                      prompt="Select a tag: ")
+    spaced_tags = [(20*"\t").join(x) for x in tags]
+    choice = call_fzf("\n".join(spaced_tags),
+                      prompt="Select a tag: ",
+                      preview="echo {1}",
+                      **{"preview-window": "right:80%"})
 
     if choice == "":
         return
 
-    index = tags.index(choice.split(", "))
-    tags_fun[index]()
+    index = tags.index(choice.split())
+    tags_fun[index].__call__()
     return
 
 
 def print_usage():
-    print("Usage: fz [option]")
-    print("Options: ")
-    print("  fz      - run fz again, but this time use fzf to select the option")
-    print("  bg      - select a background, then set it, the input files are from ~/Pictures")
-    print("  mount   - select a mount point, then mount it")
-    print("  umount  - select a mount point, then unmount it")
-    print("  ssh     - select a host, then ssh into it")
-    print("  disp    - select a monitor using randr, then ask where to display it")
-    print("  eth     - run ifplugd to connect to the internet")
-    print("  fs      - select a filesystem, particulary remote, then mount it")
-    print("  ufs     - select a filesystem, particulary remote, then unmount it")
-    print("  bt      - select a bluetooth device, then connect to it")
-    print("  ubt     - select a bluetooth device, then disconnect from it")
-    print("  ytfzf   - search youtube for a video, then play it using mpv")
-    print("  help    - print this help message")
+    usage = """Usage: fz [option] <extra context>
+Options:
+  fz      - run fz again, but this time use fzf to select the option
+  bg      - select a background from ~/Pictures/Wallpapers
+  mount   - select a mount point, then mount it
+  umount  - select a mount point, then unmount it
+  ssh     - select a host, then ssh into it
+  disp    - select a monitor using randr, then ask where to display it
+  eth     - run ifplugd to connect to the internet
+  fs      - select a filesystem, particulary remote, then mount it
+  ufs     - select a filesystem, particulary remote, then unmount it
+  bt      - select a bluetooth device, then connect to it
+  ubt     - select a bluetooth device, then disconnect from it
+  ytfzf   - search youtube for a video, then play it using mpv
+  passwd  - select a password from lastpass, then copy it to the clipboard
+  waldl   - download a wallpaper from wallhaven
+  help    - print this help message"""
+    print(usage)
 
 
 def main():
     if len(sys.argv) == 1:
-        print_usage()
-        sys.exit(0)
+        fz()
+        return
+
+    if len(sys.argv) > 2:
+        for i in range(2, len(sys.argv)):
+            context.add(sys.argv[i])
     match sys.argv[1]:
-        case  "fz" | "fzf":
-            fz()
-        case "bg":
-            bg()
+        case "p" | "pass" | "passwd":
+            passwd()
         case "m" | "mnt" | "mount":
             mount()
-        case "um" | "umnt" | "umount":
-            umount()
         case "d" | "disp" | "display":
             display()
         case "e" | "eth" | "ethernet":
             eth()
         case "f" | "fs" | "remotefs":
             fs()
-        case "uf" | "ufs" | "unmountfs" | "unfs":
-            ufs()
         case "h" | "help":
             print_usage()
         case "b" | "bt":
             bt()
+        case "fz" | "fzf":
+            fz()
+        case "um" | "umnt" | "umount":
+            umount()
+        case "bg":
+            bg()
+        case "uf" | "ufs" | "unmountfs" | "unfs":
+            ufs()
         case "ubt":
             ubt()
         case "ssh":
             ssh()
         case "yt" | "ytfzf":
+            notify("<span color='red'>Add more options</span>", "TODO")
             ytfzf()
+        case "wdl" | "waldl":
+            waldl()
         case _:
             print_usage()
-            sys.exit(0)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
