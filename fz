@@ -51,6 +51,22 @@ def call_fzf(lin: str, **kwargs):
     return out.decode().strip()
 
 
+def call_dmenu(lin: str = "", **kwargs):
+
+    prompt = kwargs.get("prompt", "")
+    kwargs.pop("prompt", None)
+    args = ["dmenu", "-b", "-fn", "monospace:size=20", "-nb", "#141c21",
+            "-nf", "#d8dee9", "-sb", "#88c0d0", "-sf", "#2e3440",
+            "-p", prompt]
+    for k, v in kwargs.items():
+        args.append(f"-{k}")
+        args.append(v)
+
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    out, _ = p.communicate(lin.encode())
+    return out.decode().strip()
+
+
 def notify(msg: str, heading: str):
     dunst = subprocess.run(
         ["notify-send", "-h", "string:bgcolor:#2e3440",
@@ -352,7 +368,19 @@ def passwd():
 
 
 def waldl():
-    subprocess.run(["waldl"])
+    # choose "a" or "w";
+    # use dmenu for query
+    # pass to waldl
+
+    option = call_fzf("w\na", prompt="Choose a or w: ")
+    if option == "":
+        return
+
+    query = call_dmenu(prompt="Enter query: ")
+    if query == "":
+        return
+
+    subprocess.run(["waldl", option, query])
     return
 
 

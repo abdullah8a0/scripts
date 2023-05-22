@@ -1,33 +1,48 @@
-#!/usr/bin/sh
+#!/usr/bin/python3
 
-# run cht.sh 
+# run cht.sh
 # Usage: cheat [query...]
 # Example: cheat python print
-# Example: cheat python print | less 
+# Example: cheat python print | less
+
+import sys
+import subprocess
 
 
+def main():
+    argv = sys.argv
+    if len(argv) == 1:
+        cmd1 = ["curl", "cht.sh/:list", "-s", "2>/dev/null"]
+        cmd2 = ["fzf", "--preview", "'curl cht.sh/{} 2> /dev/null'",
+                "--height", "40%",
+                "--layout=reverse", "--border",
+                "--preview-window=right:50%:wrap"]
+        p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
 
-if [ $# -eq 0 ]; then
-        curl cht.sh/:list 2>/dev/null | fzf --preview 'curl cht.sh/{} 2>/dev/null' \
-                --height 40%  --layout=reverse --border --preview-window=right:50%:wrap \
-                | xargs -r -I {} curl cht.sh/{} 2>/dev/null 
-        exit 0 
-fi
+        p2 = subprocess.Popen(cmd2, stdin=p1.stdout, stdout=subprocess.PIPE)
 
-if [ "$1" = "-h" ]; then
-        echo "Usage: cheat [query...]"
-        echo "Example: cheat python print"
+        p1.stdout.close()
+        output = p2.communicate()[0]
+        p1.wait()
+        p2.wait()
 
-        exit 0
-fi
+        cmd3 = ["curl", "cht.sh/" + output.decode("utf-8").strip()]
 
-query="$1"
+        subprocess.run(cmd3)
 
-for arg in "$@"; do
-        if [ "$arg" != "$1" ]; then
-                query="$query/$arg"
-        fi
-done
+        exit(0)
+    if argv[1] == "-h":
+        print("Usage: cheat [query...]")
+        print("Example: cheat python print")
+        exit(0)
 
-echo "Query: $query"
-curl cht.sh/$query
+    query = argv[1]
+    for arg in argv[2:]:
+        query = query + "/" + arg
+
+    print("Query: " + query)
+    subprocess.run(["curl", "cht.sh/" + query])
+
+
+if __name__ == "__main__":
+    main()

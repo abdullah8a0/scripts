@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Notifies the current song playing on Spotifyd
 # ENVIRONMENT VARIABLES
@@ -8,6 +8,10 @@
 # PLAYER_EVENT: The event that triggered the script (load, play, pause)
 # TRACK_ID: The track ID
 
+if [[ $DISPLAY = "" ]]; then
+    export DISPLAY=:0
+    export $(dbus-launch)
+fi
 title=$(playerctl -p spotifyd metadata title)
 artist=$(playerctl -p spotifyd metadata artist)
 

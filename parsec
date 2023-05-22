@@ -195,8 +195,6 @@ class Parsec:
             print(f"{' ' * (ord + 1)}|")
             print(f"{' ' * (ord + 1)}{loc} : {func}")
 
-
-
         print("")
 
         if self.undefined_func_calls:
