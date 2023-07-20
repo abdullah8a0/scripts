@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-
 import sys
 import os
 import subprocess
@@ -20,13 +19,28 @@ context = set()
 # helpers
 
 
-def parse_conf():
+def parse_conf() -> dict:
     config = configparser.ConfigParser()
     config.read(os.path.join(HOME, ".scripts", "bin", "fz.ini"))
 
     SSHFS = {}
     for k, v in config["SSHFS"].items():
-        SSHFS[k] = f"{k.split(' ')[1]} {v}"
+        try:
+            name, userathost = k.split(" ")
+            user, host = userathost.split("@")
+            remotedir, localdir, password, autopswd, shell = v.split(" ")
+        except Exception as e:
+            print("Invalid SSHFS entry")
+            print(e)
+            sys.exit(1)
+        SSHFS[name] = {
+            "user": user,
+            "host": host,
+            "remotedir": remotedir,
+            "localdir": os.path.join(HOME, "remote", localdir),
+            "password": password,
+            "autopswd": autopswd == "YES",
+            "shell": shell}
     return SSHFS
 
 
@@ -166,9 +180,8 @@ def bg():
         return
 
 
-base_lsblk = [
-    "nvme0n1", "nvme0n1p1", "nvme0n1p2", "nvme0n1p3", "nvme0n1p4",
-    "nvme0n1p5", "nvme0n1p6", "nvme0n2", "nvme0n3"]
+base_lsblk = ["nvme0n1", "nvme0n1p1", "nvme0n1p2", "nvme0n1p3",
+              "nvme0n1p4", "nvme0n1p5", "nvme0n1p6", "nvme0n2", "nvme0n3"]
 
 
 def mount():
@@ -253,26 +266,42 @@ def fs():
         if "sshfs" in line:
             mounted_.append(line.split(":")[-1].split()[0])
 
-    for key, val in glob_ssfs_lookup.items():
-        if val.split()[1] not in mounted_:
-            filesys.append(key)
+    revmap = {}
+    for key, data in glob_ssfs_lookup.items():
+        if data["remotedir"] not in mounted_:
+            filesys.append(f"{key} ({data['host']})")
+            revmap[f"{key} ({data['host']})"] = key
 
-    choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
+    choice = revmap[call_fzf(
+        "\n".join(filesys), prompt="Select a filesystem: ")]
 
     if choice == "":
         return
 
-    fs_cmd = glob_ssfs_lookup[choice].split(" ")
+    host_data = glob_ssfs_lookup[choice]
 
     # fs_cmd: username@host remote_dir local_dir password
 
-    os.system(f"mkdir -p { fs_cmd[2]}")
-    os.system(f"echo { fs_cmd[3] } | " + COPY_CMD)
-    os.system(f"sshfs { fs_cmd[0] }:{fs_cmd[1]} {fs_cmd[2]}")
+    if host_data["autopswd"]:
+        sshcmd = f"echo { host_data['password'] } | " + \
+            f"sshfs { host_data['user'] }@" + \
+            f"{ host_data['host'] }:{ host_data['remotedir'] } " + \
+            f"{ host_data['localdir'] } -o password_stdin "
+    else:
+        os.system(f"echo { host_data['password'] } | " + COPY_CMD)
+        sshcmd = f"sshfs { host_data['user'] }@" + \
+            f"{ host_data['host'] }:{ host_data['remotedir'] } " + \
+            f"{ host_data['localdir'] }"
+
+    os.system(f"mkdir -p { host_data['localdir'] }")
+    if (os.system(sshcmd) != 0):
+        notify("<span color='red'>Mount failed</span>", "Remote Filesystem")
+        os.system(f"rm -rf { host_data['localdir'] }")
+        return
 
     notify(
         f"Mounted <span color='orange'>{ choice }" +
-        f"</span> to {fs_cmd[2]}", "Remote Filesystem")
+        f"</span> to { host_data['localdir'] }", "Remote Filesystem")
 
     return
 
@@ -287,55 +316,67 @@ def ufs():
         if "sshfs" in line:
             mounted_.append(line.split(":")[-1].split()[0])
 
-    for key, val in glob_ssfs_lookup.items():
-        if val.split()[1] in mounted_:
-            filesys.append(key)
+    revmap = {}
+    for key, data in glob_ssfs_lookup.items():
+        if data["remotedir"] in mounted_:
+            filesys.append(f"{key} ({data['host']})")
+            revmap[f"{key} ({data['host']})"] = key
 
-    choice = call_fzf("\n".join(filesys), prompt="Select a filesystem: ")
+    choice = revmap[call_fzf(
+        "\n".join(filesys), prompt="Select a filesystem: ")]
 
     if choice == "":
         return
 
-    fs_cmd = glob_ssfs_lookup[choice].split(" ")
+    host_data = glob_ssfs_lookup[choice]
 
-    os.system(f"fusermount -u {fs_cmd[2]}")
+    if (os.system(f"fusermount -u {host_data['localdir']}") != 0):
+        notify("<span color='red'>Unmount failed</span>", "Remote Filesystem")
+        return
+    os.system(f"rm -rf {host_data['localdir']}")
 
     notify(
         f"Unmounted <span color='orange'>{ choice }" +
-        f"</span> from {fs_cmd[2]}", "Remote Filesystem")
+        f"</span> from { host_data['localdir'] }", "Remote Filesystem")
 
     return
 
 
 def ssh():
-    hosts = {}
-    host_to_name = {}
-    for key, val in glob_ssfs_lookup.items():
-        pswd = val.split()[-1]
-        name, host = key.split(" ")
-        hosts[host] = pswd
-        host_to_name[host] = name
+    revmap = {}
+    for key, data in glob_ssfs_lookup.items():
+        revmap[f"{data['host']} ({data['user']})"] = key
 
-    choice = call_fzf("\n".join(host_to_name.keys()),
-                      prompt="Select a host: ")
+    userchoice = call_fzf("\n".join(
+        (f"{hdata['host']} ({hdata['user']})"
+         for hdata in glob_ssfs_lookup.values())),
+        prompt="Select a host: ")
 
-    if choice == "":
+    if userchoice == "":
         return
 
-    os.system(f"echo {hosts[choice]} | {COPY_CMD}")
-    cmd = f"ssh { choice } -t zsh"
-    p1 = subprocess.Popen(cmd.split())
+    choice = revmap[userchoice]
+    host_data = glob_ssfs_lookup[choice]
+
+    os.system(f"echo { host_data['password'] } | " +
+              COPY_CMD)
+    cmd = ["ssh", f"{host_data['user']}@{host_data['host'] }", "-t", f"'export TERM=xterm-256color; {host_data['shell']}'"]
+    print(" ".join(cmd))
+    p1 = subprocess.Popen(cmd)
+
     notify(
-        f"Connecting to <span color='orange'>{host_to_name[choice]}" +
-        "</span>", "SSH")
+        f"Connecting to <span color='orange'>{ choice }</span>", "SSH")
     try:
         p1.wait()
     except KeyboardInterrupt:
         p1.kill()
-        notify("<span color='red'>SSH connection failed</span>", "SSH")
+        notify("<span color='red'>SSH connection interrupted</span>", "SSH")
         return
     if p1.returncode != 0:
-        notify("<span color='red'>SSH connection failed</span>", "SSH")
+        notify(
+            f"<span color='red'>SSH connection failed\n\
+Return code: {p1.returncode}</span>", "SSH")
+
     return
 
 
@@ -384,6 +425,36 @@ def waldl():
     return
 
 
+def unicode():
+    import re
+    emojis = os.path.join(HOME, ".scripts", "bin", "data", "emoji-test.txt")
+    with open(emojis, "r") as f:
+        choices = []
+        emojis = []
+        for line in f:
+            if line.startswith("#") or line == "\n":
+                continue
+            # regex detects:         codepoint; status# emoji
+            # use regex to get emojis
+
+            regex = r"^((\S+\s)+)\s+;\s+(\S+)\s+#\s+(\S+) \S+ (.*)"
+            match = re.search(regex, line)
+            if match and match.group(3) == "fully-qualified":
+                choices.append(
+                    f"{match.group(1)} {match.group(5)} ({match.group(4)})")
+                emojis.append(match.group(4))
+
+    choice = call_fzf("\n".join(choices), prompt="Select an emoji: ")
+    if choice == "":
+        return
+
+    index = choices.index(choice)
+    emoji = emojis[index]
+
+    os.system(f"echo '{ emoji }' | " + COPY_CMD)
+    return
+
+
 bg_tags = ["bg", "background", "image", "wallpaper", "Picture", "Pictures",
            "pic", "pics", "image", "images"]
 mount_tags = ["mount", "mountp", "usb", "drive", "drives", "cd", "CD", "dvd",
@@ -409,16 +480,17 @@ ssh_tags = ["ssh", "remoteshell" "shell"]
 ytfzf_tags = ["ytfzf", "youtube", "yt", "video", "videos", "music", "song"]
 pass_tags = ["pass", "password", "passwords", "lpass", "lastpass", "lpassp"]
 waldl_tags = ["waldl", "wallhaven", "wallpaper", "wallpapers", "wallhaven.cc"]
+unicode_tags = ["unicode", "emoji", "emojis", "emote", "emotes", "emoticon"]
 
 
 tags = [
     bg_tags, mount_tags, umount_tags, display_tags, eth_tags,
     remote_fs_tags, unremote_fs_tags, bt_tags, unbt_tags, ssh_tags,
-    ytfzf_tags, pass_tags, waldl_tags
+    ytfzf_tags, pass_tags, waldl_tags, unicode_tags
 
 ]
 tags_fun = [bg, mount, umount, display, eth,
-            fs, ufs, bt, ubt, ssh, ytfzf, passwd, waldl]
+            fs, ufs, bt, ubt, ssh, ytfzf, passwd, waldl, unicode]
 
 assert len(tags) == len(tags_fun)
 
@@ -428,7 +500,7 @@ def fz():
     choice = call_fzf("\n".join(spaced_tags),
                       prompt="Select a tag: ",
                       preview="echo {1}",
-                      **{"preview-window": "right:80%"})
+                      **{"preview-window": "right:20%"})
 
     if choice == "":
         return
@@ -455,6 +527,7 @@ Options:
   ytfzf   - search youtube for a video, then play it using mpv
   passwd  - select a password from lastpass, then copy it to the clipboard
   waldl   - download a wallpaper from wallhaven
+  unicode - search unicode emojis, then copy it to the clipboard
   help    - print this help message"""
     print(usage)
 
@@ -468,7 +541,7 @@ def main():
         for i in range(2, len(sys.argv)):
             context.add(sys.argv[i])
     match sys.argv[1]:
-        case "p" | "pass" | "passwd":
+        case "p" | "pa" | "pass" | "password":
             passwd()
         case "m" | "mnt" | "mount":
             mount()
@@ -492,13 +565,15 @@ def main():
             ufs()
         case "ubt":
             ubt()
-        case "ssh":
+        case "ssh" | "s":
             ssh()
         case "yt" | "ytfzf":
             notify("<span color='red'>Add more options</span>", "TODO")
             ytfzf()
         case "wdl" | "waldl":
             waldl()
+        case "unicode" | "uni":
+            unicode()
         case _:
             print_usage()
             sys.exit(1)
