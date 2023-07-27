@@ -1,0 +1,66 @@
+#!/opt/homebrew/bin/python3
+
+import sys
+
+std_math_ops = {'+': lambda st: [float(st[0]) + float(st[1]), *st[2:]],
+                '-': lambda st: [float(st[0]) - float(st[1]), *st[2:]],
+                '*': lambda st: [float(st[0]) * float(st[1]), *st[2:]],
+                '/': lambda st: [float(st[0]) / float(st[1]), *st[2:]],
+                '%': lambda st: [float(st[0]) % float(st[1]), *st[2:]],
+                '^': lambda st: [float(st[0]) ** float(st[1]), *st[2:]]}
+
+
+class MathOps:
+    def __init__(self, ops: dict[str, callable]):
+        self.ops = ops
+
+    def __getitem__(self, key: str) -> callable:
+        if len(key) == 2:
+            # if key is of the forn 'n$' where n is a number
+            # and $ is a math operator, perform the operation
+            # n times
+            if key[0].isdigit():
+                op = self.ops[key[1]]
+                def func(st, i): return (op(st), i-1)
+
+                def while_loop(func, st, i):
+                    if i == 1:
+                        return st
+                    else:
+                        return while_loop(func, *func(st, i))
+                return lambda st: while_loop(func, st, int(key[0]))
+            else:
+                raise KeyError(f"Invalid key: {key}")
+        elif len(key) == 1:
+            return self.ops[key]
+        else:
+            raise KeyError(f"Invalid key: {key}")
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.ops or (
+            len(key) == 2
+            and key[1] in self.ops
+            and key[0].isdigit())
+
+
+def ev(st: list[str | float | int]) -> list[str | float | int]:
+    i = len(st) - 1
+    math_ops = MathOps(std_math_ops)
+    while i >= 0:
+        print(st)
+        if st[i] in math_ops:
+            st = st[:i] + math_ops[st[i]](st[i+1:])
+        i -= 1
+    return st
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: calc.py [op string]")
+        sys.exit(1)
+    st = sys.argv[1:]
+    print(ev(st))
+
+
+if __name__ == "__main__":
+    main()
